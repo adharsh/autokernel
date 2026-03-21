@@ -134,7 +134,12 @@ tail -f agent*.log
 
 # Stop all
 kill $(cat .agent_pids)
+
+# Resume from where agents left off
+./scripts/launch.sh --resume
 ```
+
+Resume uses `claude --continue` to pick up the previous session. The agent reads `results.tsv` and the current git branch to figure out where it was.
 
 ## Step 9. Monitor from Claude Code interactive session (optional)
 
