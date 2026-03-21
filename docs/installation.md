@@ -123,23 +123,23 @@ Restart Claude Code to access microbench agent. This is a manual step.
 Auto-detects GPUs and spawns one agent per GPU. Agent 0 uses the repo directly; agents 1+ get their own git worktree.
 
 ```bash
-./scripts/launch.sh
+./scripts/agents.sh start
 ```
 
-Logs go to `agent{N}.log`. PIDs are saved to `.agent_pids`.
+Logs go to `results/logs/agent{N}.log`. PIDs are saved to `.agent_pids`.
 
 ```bash
-# Monitor
-tail -f agent*.log
+# Check agent status
+./scripts/agents.sh status
 
 # Stop all
-kill $(cat .agent_pids)
+./scripts/agents.sh stop
 
 # Resume from where agents left off
-./scripts/launch.sh --resume
+./scripts/agents.sh resume
 ```
 
-Resume uses `claude --continue` to pick up the previous session. The agent reads `results.tsv` and the current git branch to figure out where it was.
+Resume uses `claude --continue` to pick up the previous session. The agent reads `results/experiments.tsv` and the current git branch to figure out where it was.
 
 ## Step 9. Monitor from Claude Code interactive session (optional)
 
