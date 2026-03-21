@@ -8,8 +8,6 @@ build/
 
 # Virtual environment
 .venv/
-
-# uv
 .python-version
 
 # CUDA compilation artifacts
@@ -28,56 +26,33 @@ build/
 # Runtime artifacts
 compiled_cache.db
 run.log
+progress.png
+speedup.png
+report.md
 
-# Results (tracked separately or shared via other means)
+# Results
 results.tsv
 
-# Worktrees (created by launch script)
+# Worktrees
 worktree-a*/
-
-# Agent state files (per-agent JSON state)
-.agent_state/
 
 # IDE
 .vscode/
 .idea/
+*.sw?
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Claude-flow / AI tooling (not project source)
+# AI tooling
 .claude/
 .claude-flow/
 .swarm/
 .mcp.json
-CLAUDE.md
 .taskmaster/
+CLAUDE.md
+.env
 
 # Docs not for commit
 docs/installation.md
-
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-dev-debug.log
-# Dependency directories
-node_modules/
-# Environment variables
-.env
-# Editor directories and files
-.idea
-.vscode
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-# OS specific
-
-# Task files
-# tasks.json
-# tasks/ 
