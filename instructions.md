@@ -41,38 +41,27 @@ Append baseline row to `results.tsv` with `experiment_id=a{AGENT_ID}/0`, `parent
 
 Run this loop indefinitely. Do not pause to ask the human anything.
 
-### 1. Cross-pollinate
-
-Read `results.tsv`. Look for other agents' `keep` rows with speedup > your best. If found:
-
-```bash
-git show {their_experiment_id}:candidate/interface.py   # read their code
-git diff {their_parent}..{their_experiment_id} -- candidate/   # see what changed
-```
-
-Adapt their ideas. Set `parent_id` to their experiment when you do.
-
-### 2. Hypothesize
+### 1. Hypothesize
 
 Pick ONE focused change. Write it down as a short description (e.g., "fuse norm+proj", "shared memory tiling", "vectorized loads").
 
-### 3. Branch
+### 2. Branch
 
 ```bash
 git checkout -b a{AGENT_ID}/{n} {current_base}
 ```
 
-### 4. Edit
+### 3. Edit
 
 Modify `candidate/interface.py`. One hypothesis per experiment. Backends: PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX -- use whichever fits.
 
-### 5. Commit
+### 4. Commit
 
 ```bash
 git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"
 ```
 
-### 6. Validate
+### 5. Validate
 
 ```bash
 python validate.py > run.log 2>&1
@@ -81,13 +70,13 @@ grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
 
 If grep is empty, the run crashed. Read `tail -n 50 run.log` for the traceback. If it is a trivial fix (typo, import), fix and re-run. Otherwise log as crash and move on.
 
-### 7. Compute speedup
+### 6. Compute speedup
 
 ```
 speedup = reference_us / candidate_us
 ```
 
-### 8. Log result
+### 7. Log result
 
 Append one row to `results.tsv` using `fcntl.flock()` (exclusive lock, append mode). Columns:
 
@@ -97,7 +86,7 @@ experiment_id  parent_id  agent_id  commit  timestamp  candidate_us  reference_u
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
 
-### 9. Keep or discard
+### 8. Keep or discard
 
 **If** `correctness == PASS` **and** `speedup > best_speedup`:
 - `status = "keep"`, `current_base = "a{AGENT_ID}/{n}"`, `best_speedup = speedup`
@@ -106,11 +95,11 @@ Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse -
 - `status = "discard"` (or `"crash"`)
 - `git checkout {current_base}`
 
-### 10. Repeat
+### 9. Repeat
 
 Increment `n`. Go to step 1.
 
-If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, re-read results.tsv for inspiration, try combining previous near-misses, or try a radically different backend.
+If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, try combining previous near-misses, or try a radically different backend.
 
 ## Constraints and Tools
 

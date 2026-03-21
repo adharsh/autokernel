@@ -163,14 +163,6 @@ done
 wait
 ```
 
-### Cross-pollination
-Agents can read results.tsv to see what other agents tried. To understand a promising experiment from another agent:
-```bash
-git show a1/5:candidate/interface.py         # read the code
-git diff a0/master..a1/5 -- candidate/       # see the diff
-```
-When adapting, set `parent_id` to the source experiment.
-
 ---
 
 ## 7. Microbench Agent
@@ -328,9 +320,8 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 
 ### Experiment loop (NEVER STOP — run indefinitely)
 ```
-1. Check results.tsv for other agents' findings (cross-pollination)
-2. Hypothesize one focused optimization change
-3. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
+1. Hypothesize one focused optimization change
+2. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
 6. Run: python validate.py → extract candidate_us, reference_us, correctness, peak_vram_mb
