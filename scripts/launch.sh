@@ -25,19 +25,29 @@ fi
 NUM_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
 echo "Detected $NUM_GPUS GPU(s)"
 
+# Find next free agent prefix by checking existing a{N}/* branches
+MAX_PREFIX=$(git branch --list 'a*/*' | sed 's|.*a\([0-9]*\)/.*|\1|' | sort -n | tail -1)
+if [ -n "$MAX_PREFIX" ]; then
+  PREFIX_OFFSET=$((MAX_PREFIX + 1))
+else
+  PREFIX_OFFSET=0
+fi
+echo "Agent prefix offset: $PREFIX_OFFSET (agents will be a${PREFIX_OFFSET}..a$((PREFIX_OFFSET + NUM_GPUS - 1)))"
+
 : > .agent_pids  # truncate pid file
 
 for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
+  AGENT_ID=$((GPU_ID + PREFIX_OFFSET))
   WORKTREE="$ROOT"
   if [ "$GPU_ID" -gt 0 ]; then
-    WORKTREE="$ROOT/worktree-a${GPU_ID}"
+    WORKTREE="$ROOT/worktree-a${AGENT_ID}"
     if [ ! -d "$WORKTREE" ]; then
       git worktree add "$WORKTREE" master
     fi
   fi
 
-  LOG="$ROOT/agent${GPU_ID}.log"
-  echo "Launching agent $GPU_ID on GPU $GPU_ID → $LOG"
+  LOG="$ROOT/agent${AGENT_ID}.log"
+  echo "Launching agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
   if [ "$RESUME" = true ]; then
     CUDA_VISIBLE_DEVICES=$GPU_ID claude -p \
@@ -54,7 +64,7 @@ for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
       --verbose \
       --allowedTools "Edit" "Write" "Read" "Bash" "Glob" "Grep" "Agent" \
       --permission-mode bypassPermissions \
-      "You are agent $GPU_ID. AGENT_ID=$GPU_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything." \
+      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything." \
       > "$LOG" 2>&1 &
   fi
 
