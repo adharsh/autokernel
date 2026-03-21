@@ -8,6 +8,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
+RESULTS_DIR="$ROOT/results"
+LOGS_DIR="$RESULTS_DIR/logs"
 
 RESUME=false
 if [ "${1:-}" = "--resume" ]; then
@@ -34,6 +36,7 @@ else
 fi
 echo "Agent prefix offset: $PREFIX_OFFSET (agents will be a${PREFIX_OFFSET}..a$((PREFIX_OFFSET + NUM_GPUS - 1)))"
 
+mkdir -p "$LOGS_DIR"
 : > .agent_pids  # truncate pid file
 
 for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
@@ -46,7 +49,7 @@ for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
     fi
   fi
 
-  LOG="$ROOT/agent${AGENT_ID}.log"
+  LOG="$LOGS_DIR/agent${AGENT_ID}.log"
   echo "Launching agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
   if [ "$RESUME" = true ]; then
@@ -56,7 +59,7 @@ for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
       --verbose \
       --allowedTools "Edit" "Write" "Read" "Bash" "Glob" "Grep" "Agent" \
       --permission-mode bypassPermissions \
-      "You were interrupted. Read results.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
+      "You were interrupted. Read results/results.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
       >> "$LOG" 2>&1 &
   else
     CUDA_VISIBLE_DEVICES=$GPU_ID claude -p \
@@ -74,8 +77,8 @@ done
 
 echo ""
 echo "All agents launched. Monitor with:"
-echo "  tail -f agent*.log"
-echo "  cat results.tsv | column -t -s\$'\\t'"
+echo "  tail -f $LOGS_DIR/agent*.log"
+echo "  cat $RESULTS_DIR/results.tsv | column -t -s\$'\\t'"
 echo ""
 echo "Stop all agents:"
 echo "  kill \$(cat .agent_pids)"

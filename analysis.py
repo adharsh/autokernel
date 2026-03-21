@@ -10,18 +10,19 @@ Reads results.tsv (multi-agent kernel optimization log), produces:
 Usage:  uv run analysis.py
 """
 from __future__ import annotations
-import os
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 
 from profile_utils import TSV_COLUMNS
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROGRESS_HTML = os.path.join(SCRIPT_DIR, "progress.html")
-SPEEDUP_HTML = os.path.join(SCRIPT_DIR, "speedup.html")
-REPORT_MD = os.path.join(SCRIPT_DIR, "report.md")
+SCRIPT_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = SCRIPT_DIR / "results"
+PROGRESS_HTML = RESULTS_DIR / "progress.html"
+SPEEDUP_HTML = RESULTS_DIR / "speedup.html"
+REPORT_MD = RESULTS_DIR / "report.md"
 
 AGENT_SYMBOLS = ["circle", "square", "diamond", "triangle-up", "triangle-down",
                  "cross", "x", "star"]
@@ -34,10 +35,10 @@ GPU_VRAM_CAPACITY_MB = 81920  # 80 GB default
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_results(path: str = "results.tsv") -> pd.DataFrame | None:
+def load_results(path: str = "results/results.tsv") -> pd.DataFrame | None:
     """Read TSV, normalize columns, convert numerics. None if missing/empty."""
-    resolved = path if os.path.isabs(path) else os.path.join(SCRIPT_DIR, path)
-    if not os.path.exists(resolved):
+    resolved = Path(path) if Path(path).is_absolute() else SCRIPT_DIR / path
+    if not resolved.exists():
         return None
     df = pd.read_csv(resolved, sep="\t")
     if len(df) == 0:
@@ -463,9 +464,10 @@ def generate_report(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    RESULTS_DIR.mkdir(exist_ok=True)
     df = load_results()
     if df is None:
-        print("No results.tsv found.")
+        print("No results/results.tsv found.")
         return
     if len(df) == 0:
         print("No experiments yet (results.tsv contains only the header).")

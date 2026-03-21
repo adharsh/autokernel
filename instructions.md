@@ -19,9 +19,9 @@ Environment variables you receive:
 | `validate.py` | NO | Never modify. Run it to test. |
 | `reference.py` | NO | Never modify. Ground truth. |
 | `candidate/` | YES | All your optimization code goes here. `interface.py` is the Python entry point that `validate.py` imports. You may create additional files (`.py`, `.cu`, `.cuh`, etc.) inside `candidate/`. |
-| `results.tsv` | APPEND-ONLY | Never delete or rewrite rows. |
+| `results/results.tsv` | APPEND-ONLY | Never delete or rewrite rows. |
 
-Do not commit `results.tsv` or `run.log` to git. Leave them untracked.
+Do not commit `results/` or `run.log` to git. Leave them untracked.
 
 ### Experiment naming
 
@@ -33,11 +33,12 @@ Examples: `a0/0` (baseline), `a0/1` (first experiment), `a1/3` (agent 1, fourth 
 
 ```bash
 cd $WORKTREE_PATH
+mkdir -p results
 uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
 ```
 
-Append baseline row to `results.tsv` with `experiment_id=a{AGENT_ID}/0`, `parent_id=-`, `status=keep`, `description=baseline`. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
+Append baseline row to `results/results.tsv` with `experiment_id=a{AGENT_ID}/0`, `parent_id=-`, `status=keep`, `description=baseline`. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
 
 ## Experiment Loop (NEVER STOP)
 
@@ -80,7 +81,7 @@ speedup = reference_us / candidate_us
 
 ### 7. Log result
 
-Append one tab-separated row to `results.tsv`. Use `profile_utils.append_result` for file-locked writes when multiple agents share the file, or just `echo -e "..." >> results.tsv` for single-agent runs.
+Append one tab-separated row to `results/results.tsv`. Use `profile_utils.append_result` for file-locked writes when multiple agents share the file, or just `echo -e "..." >> results/results.tsv` for single-agent runs.
 
 Columns (tab-separated):
 

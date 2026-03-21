@@ -26,12 +26,10 @@ build/
 # Runtime artifacts
 compiled_cache.db
 run.log
-progress.png
-speedup.png
-report.md
+.agent_pids
 
-# Results
-results.tsv
+# Results (TSV, plots, reports)
+results/
 
 # Worktrees
 worktree-a*/
