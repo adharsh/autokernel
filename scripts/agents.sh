@@ -19,21 +19,30 @@ PID_FILE="$ROOT/.agent_pids"
 # Subcommands
 # ---------------------------------------------------------------------------
 
+# Parse a line from PID_FILE. Format: "AGENT_ID:PID".
+# Sets: _agent_id, _pid
+_parse_pid_line() {
+  local line="$1"
+  _agent_id="${line%%:*}"
+  _pid="${line#*:}"
+}
+
 cmd_stop() {
   if [ ! -f "$PID_FILE" ]; then
     echo "No .agent_pids file found."
     return
   fi
   echo "Killing agents..."
-  while IFS=: read -r pid agent_id; do
-    kill "$pid" 2>/dev/null || true
+  while read -r line; do
+    _parse_pid_line "$line"
+    kill "$_pid" 2>/dev/null || true
   done < "$PID_FILE"
   sleep 1
-  # Verify
-  while IFS=: read -r pid agent_id; do
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "  a${agent_id} (PID $pid) still alive, sending SIGKILL..."
-      kill -9 "$pid" 2>/dev/null || true
+  while read -r line; do
+    _parse_pid_line "$line"
+    if kill -0 "$_pid" 2>/dev/null; then
+      echo "  a${_agent_id} (PID $_pid) still alive, sending SIGKILL..."
+      kill -9 "$_pid" 2>/dev/null || true
     fi
   done < "$PID_FILE"
   echo "All agents stopped."
@@ -45,16 +54,17 @@ cmd_status() {
     return
   fi
   echo ""
-  while IFS=: read -r pid agent_id; do
-    if kill -0 "$pid" 2>/dev/null; then
+  while read -r line; do
+    _parse_pid_line "$line"
+    if kill -0 "$_pid" 2>/dev/null; then
       state="running"
     else
       state="dead"
     fi
-    printf "  a%-4s  PID %-8s  %-8s" "$agent_id" "$pid" "$state"
+    printf "  a%-4s  PID %-8s  %-8s" "$_agent_id" "$_pid" "$state"
     if [ -f "$TSV" ]; then
-      count=$(awk -F'\t' -v a="$agent_id" '$3 == a' "$TSV" 2>/dev/null | wc -l)
-      best=$(awk -F'\t' -v a="$agent_id" '$3 == a && $11 == "keep" { if ($8+0 > max) max=$8+0 } END { if (max > 0) printf "%.2fx", max; else print "n/a" }' "$TSV" 2>/dev/null)
+      count=$(awk -F'\t' -v a="$_agent_id" '$3 == a' "$TSV" 2>/dev/null | wc -l)
+      best=$(awk -F'\t' -v a="$_agent_id" '$3 == a && $11 == "keep" { if ($8+0 > max) max=$8+0 } END { if (max > 0) printf "%.2fx", max; else print "n/a" }' "$TSV" 2>/dev/null)
       printf "  | %3d experiments | best %s" "$count" "$best"
     fi
     echo ""
@@ -66,7 +76,10 @@ cmd_start() {
   # Kill existing agents first
   if [ -f "$PID_FILE" ]; then
     echo "Killing existing agents..."
-    xargs kill 2>/dev/null < "$PID_FILE" || true
+    while read -r line; do
+      _parse_pid_line "$line"
+      kill "$_pid" 2>/dev/null || true
+    done < "$PID_FILE"
     sleep 1
   fi
 
@@ -106,7 +119,7 @@ cmd_start() {
       "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything." \
       > "$LOG" 2>&1 &
 
-    echo "$!:$AGENT_ID" >> "$PID_FILE"
+    echo "$AGENT_ID:$!" >> "$PID_FILE"
     echo "  PID $!"
   done
 
@@ -158,7 +171,7 @@ cmd_resume() {
       "You were interrupted. Read results/experiments.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
       >> "$LOG" 2>&1 &
 
-    echo "$!:$AGENT_ID" >> "$PID_FILE"
+    echo "$AGENT_ID:$!" >> "$PID_FILE"
     echo "  PID $!"
   done
 
