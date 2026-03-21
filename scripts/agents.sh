@@ -86,8 +86,8 @@ cmd_start() {
   NUM_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
   echo "Detected $NUM_GPUS GPU(s)"
 
-  # Find next free agent prefix by checking existing a{N}/* branches
-  MAX_PREFIX=$(git branch --list 'a*/*' | sed 's|.*a\([0-9]*\)/.*|\1|' | sort -n | tail -1)
+  # Find next free agent prefix by checking existing a{N}/{M} branches
+  MAX_PREFIX=$(git branch --list 'a*/*' | grep -oP '(?<=\ba)\d+(?=/)' | sort -n | tail -1 || true)
   if [ -n "$MAX_PREFIX" ]; then
     PREFIX_OFFSET=$((MAX_PREFIX + 1))
   else
