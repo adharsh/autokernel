@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# uv
+.python-version
+
+# CUDA compilation artifacts
+*.cubin
+*.fatbin
+*.ptx
+*.o
+*.a
+
+# Profiling outputs
+*.ncu-rep
+*.nsys-rep
+*.sqlite
+*.qdstrm
+
+# Runtime artifacts
+compiled_cache.db
+run.log
+
+# Results (tracked separately or shared via other means)
+results.tsv
+
+# Worktrees (created by launch script)
+worktree-a*/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude-flow / AI tooling (not project source)
+.claude/
+.claude-flow/
+.swarm/
+.mcp.json
+CLAUDE.md
+
+# Docs not for commit
+docs/installation.md
