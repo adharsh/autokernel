@@ -117,7 +117,7 @@ All else being equal, simpler is better. A small speedup that adds ugly complexi
 |------|-----|
 | `ncu` | NVIDIA Nsight Compute -- kernel-level profiling |
 | `nsight-systems` | System-wide timeline profiling |
-| microbench agent | Spawns sub-agent returning per-line sub-op breakdown table |
+| microbench agent | Spawns sub-agent returning per-line sub-op breakdown table (see `agents/microbench.md`) |
 
 ### Constraints
 
