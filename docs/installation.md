@@ -51,14 +51,9 @@ This makes the microbench agent discoverable by Claude Code. The source file (`a
 
 ## Step 4: Clean up AI tooling artifacts
 
-Remove scaffolding files that can confuse optimization agents (but keep `.claude/` — it has the agent symlinks from Step 3):
-
 ```bash
-rm -f CLAUDE.md .mcp.json
-rm -rf .claude-flow/ .swarm/ .taskmaster/
+rm CLAUDE.md
 ```
-
-The agents only need `instructions.md` and `agents/microbench.md` (symlinked in `.claude/agents/`).
 
 ## Step 5: Verify
 
@@ -110,6 +105,14 @@ nvrtc.nvrtcDestroyProgram(prog)
 nsys profile -o /tmp/nsys_test --force-overwrite true -- uv run python -c "import torch; torch.randn(100,100,device='cuda') @ torch.randn(100,100,device='cuda')"
 echo "nsys: OK"
 ```
+
+## Step 6. Fill out code
+
+Create validate.py and reference.py based on the provided spec under docs.
+
+## Step 7. Restart Claude Code to access microbench agent. (Manual)
+
+Restart Claude Code to access microbench agent. This is a manual step.
 
 ## Profiling permissions (ncu)
 
