@@ -48,7 +48,7 @@ def load_results(path: str = "results/experiments.tsv") -> pd.DataFrame | None:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     if "timestamp" in df.columns:
-        df["_ts"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df["_ts"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
         df = df.sort_values("_ts").reset_index(drop=True)
     return df
 
