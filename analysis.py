@@ -2,8 +2,8 @@
 AutoKernel -- Analysis & visualization of experiment results.
 
 Reads results.tsv (multi-agent kernel optimization log), produces:
-  - progress.png   : scatter of candidate latency over experiments
-  - speedup.png    : scatter of speedup over experiments
+  - progress.html  : interactive scatter of candidate latency over experiments
+  - speedup.html   : interactive scatter of speedup over experiments
   - report.md      : markdown session report
   - terminal output: summary statistics + delta ranking
 
@@ -14,19 +14,17 @@ import os
 from datetime import datetime
 
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
+import plotly.graph_objects as go
 
 from profile_utils import TSV_COLUMNS
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROGRESS_PNG = os.path.join(SCRIPT_DIR, "progress.png")
-SPEEDUP_PNG = os.path.join(SCRIPT_DIR, "speedup.png")
+PROGRESS_HTML = os.path.join(SCRIPT_DIR, "progress.html")
+SPEEDUP_HTML = os.path.join(SCRIPT_DIR, "speedup.html")
 REPORT_MD = os.path.join(SCRIPT_DIR, "report.md")
 
-AGENT_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
+AGENT_SYMBOLS = ["circle", "square", "diamond", "triangle-up", "triangle-down",
+                 "cross", "x", "star"]
 COLOR_KEEP, COLOR_DISCARD, COLOR_CRASH = "#2ecc71", "#cccccc", "#e74c3c"
 COLOR_FRONTIER, COLOR_BASELINE = "#27ae60", "#3498db"
 GPU_VRAM_CAPACITY_MB = 81920  # 80 GB default
@@ -81,37 +79,11 @@ def classify_row(row) -> str:
 # Plot helpers
 # ---------------------------------------------------------------------------
 
-def _agent_marker(agent_id) -> str:
+def _agent_symbol(agent_id) -> str:
     try:
-        return AGENT_MARKERS[int(agent_id) % len(AGENT_MARKERS)]
+        return AGENT_SYMBOLS[int(agent_id) % len(AGENT_SYMBOLS)]
     except (ValueError, TypeError):
-        return "o"
-
-
-def _scatter_by_agent(ax, sub, xcol, ycol, color, label, alpha, z):
-    """Scatter with per-agent markers. Only the first agent gets the legend."""
-    used = False
-    for agent in sorted(sub["agent_id"].fillna(0).unique()):
-        chunk = sub[sub["agent_id"].fillna(0) == agent]
-        ax.scatter(chunk[xcol], chunk[ycol], c=color, marker=_agent_marker(agent),
-                   s=45, alpha=alpha, edgecolors="none",
-                   label=(label if not used else None), zorder=z)
-        used = True
-
-
-def _annotate_top3(ax, kept, xcol, ycol, lower_better):
-    if len(kept) == 0:
-        return
-    top = kept.sort_values(ycol, ascending=lower_better).head(3)
-    for rank, (_, r) in enumerate(top.iterrows()):
-        desc = str(r.get("description", "")).strip()
-        if len(desc) > 40:
-            desc = desc[:37] + "..."
-        ax.annotate(f"#{rank+1}: {desc}", xy=(r[xcol], r[ycol]),
-                    xytext=(10, 10 + rank * 15), textcoords="offset points",
-                    fontsize=7.5, color=COLOR_FRONTIER, fontweight="bold",
-                    arrowprops=dict(arrowstyle="->", color=COLOR_FRONTIER, lw=0.8),
-                    zorder=6)
+        return "circle"
 
 
 def _ref_and_best(df, cats):
@@ -135,90 +107,149 @@ def _ref_and_best(df, cats):
     return ref_us, best_us, best_speedup
 
 
+def _hover_text(row) -> str:
+    """Build rich hover text for a single experiment row."""
+    parts = []
+    for col, label in [("experiment_id", "Branch"),
+                       ("description", "Description"),
+                       ("candidate_us", "Latency"),
+                       ("speedup", "Speedup"),
+                       ("correctness", "Correctness"),
+                       ("status", "Status"),
+                       ("commit", "Commit"),
+                       ("agent_id", "Agent"),
+                       ("peak_vram_mb", "VRAM (MB)"),
+                       ("parent_id", "Parent")]:
+        val = row.get(col)
+        if pd.isna(val):
+            continue
+        if col == "candidate_us":
+            parts.append(f"<b>{label}:</b> {float(val):.2f} us")
+        elif col == "speedup":
+            parts.append(f"<b>{label}:</b> {float(val):.3f}x")
+        elif col == "peak_vram_mb" and float(val) > 0:
+            parts.append(f"<b>{label}:</b> {float(val):.0f}")
+        elif col == "agent_id":
+            parts.append(f"<b>{label}:</b> a{int(val)}")
+        elif col not in ("candidate_us", "speedup", "peak_vram_mb", "agent_id"):
+            parts.append(f"<b>{label}:</b> {val}")
+    return "<br>".join(parts)
+
+
+def _add_scatter_traces(fig, df, ycol):
+    """Add scatter traces grouped by category and agent, with hover info."""
+    cat_style = [
+        ("discard", COLOR_DISCARD, "Discard", 0.55),
+        ("crash",   COLOR_CRASH,   "Crash",   0.65),
+        ("keep",    COLOR_KEEP,    "Keep",    0.85),
+    ]
+    for cat, color, label, opacity in cat_style:
+        sub = df[df["_cat"] == cat]
+        if len(sub) == 0:
+            continue
+        for i, agent in enumerate(sorted(sub["agent_id"].fillna(0).unique())):
+            chunk = sub[sub["agent_id"].fillna(0) == agent]
+            fig.add_trace(go.Scatter(
+                x=chunk["_n"], y=chunk[ycol], mode="markers",
+                marker=dict(color=color, symbol=_agent_symbol(agent),
+                            size=8, opacity=opacity),
+                text=chunk["_hover"], hoverinfo="text",
+                name=label if i == 0 else None,
+                legendgroup=cat, showlegend=(i == 0),
+            ))
+
+
 # ---------------------------------------------------------------------------
-# Task 5: Main progress plot (latency, lower is better)
+# Interactive progress plot (latency, lower is better)
 # ---------------------------------------------------------------------------
 
 def make_progress_plot(df: pd.DataFrame) -> None:
-    """Scatter of candidate_us over experiments. Running min frontier."""
+    """Interactive scatter of candidate_us over experiments."""
     if "candidate_us" not in df.columns:
         print("WARNING: candidate_us column missing -- skipping progress plot.")
         return
     df = df.copy()
     df["_cat"] = df.apply(classify_row, axis=1)
     df["_n"] = range(1, len(df) + 1)
-    fig, ax = plt.subplots(figsize=(13, 6))
-    for cat, col, lbl, a, z in [("discard", COLOR_DISCARD, "Discard", .55, 2),
-                                 ("crash", COLOR_CRASH, "Crash", .65, 3),
-                                 ("keep", COLOR_KEEP, "Keep", .85, 4)]:
-        s = df[df["_cat"] == cat]
-        if len(s):
-            _scatter_by_agent(ax, s, "_n", "candidate_us", col, lbl, a, z)
+    df["_hover"] = df.apply(_hover_text, axis=1)
+
+    fig = go.Figure()
+    _add_scatter_traces(fig, df, "candidate_us")
+
+    # Running-best frontier
     valid = df[(df["_cat"] == "keep") & df["candidate_us"].notna()]
     if len(valid):
-        ax.step(valid["_n"], valid["candidate_us"].cummin(), where="post",
-                color=COLOR_FRONTIER, linewidth=2, alpha=.8, label="Running best", zorder=3)
+        frontier = valid["candidate_us"].cummin()
+        fig.add_trace(go.Scatter(
+            x=valid["_n"], y=frontier, mode="lines",
+            line=dict(color=COLOR_FRONTIER, width=2, shape="hv"),
+            name="Running best", hoverinfo="skip",
+        ))
+
+    # Reference baseline
     if "reference_us" in df.columns and len(df):
         ref = df.iloc[0].get("reference_us")
         if pd.notna(ref) and float(ref) > 0:
-            ax.axhline(y=float(ref), color=COLOR_BASELINE, linestyle="--",
-                       linewidth=1.5, alpha=.7, label=f"Reference ({float(ref):.1f} us)", zorder=1)
-    _annotate_top3(ax, df[df["_cat"] == "keep"].dropna(subset=["candidate_us"]),
-                   "_n", "candidate_us", lower_better=True)
+            fig.add_hline(y=float(ref), line_dash="dash", line_color=COLOR_BASELINE,
+                          annotation_text=f"Reference ({float(ref):.1f} us)",
+                          annotation_position="top left")
+
     nt, nk = len(df), (df["_cat"] == "keep").sum()
-    ax.set_xlabel("Experiment #", fontsize=11)
-    ax.set_ylabel("Candidate Latency (us) -- lower is better", fontsize=11)
-    ax.set_title(f"AutoKernel -- Optimization Progress: {nt} experiments, {nk} kept",
-                 fontsize=13, fontweight="bold")
-    ax.legend(loc="upper right", fontsize=9, framealpha=.9)
-    ax.grid(True, alpha=.3)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.0f"))
-    fig.tight_layout()
-    fig.savefig(PROGRESS_PNG, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {PROGRESS_PNG}")
+    fig.update_layout(
+        title=f"AutoKernel -- Optimization Progress: {nt} experiments, {nk} kept",
+        xaxis_title="Experiment #",
+        yaxis_title="Candidate Latency (us) -- lower is better",
+        hovermode="closest",
+        template="plotly_white",
+        height=600, width=1100,
+    )
+    fig.write_html(PROGRESS_HTML)
+    print(f"Saved: {PROGRESS_HTML}")
 
 
 # ---------------------------------------------------------------------------
-# Task 15: Secondary speedup plot (higher is better)
+# Interactive speedup plot (higher is better)
 # ---------------------------------------------------------------------------
 
 def make_speedup_plot(df: pd.DataFrame) -> None:
-    """Scatter of speedup over experiments. Running max frontier."""
+    """Interactive scatter of speedup over experiments."""
     if "speedup" not in df.columns:
         print("WARNING: speedup column missing -- skipping speedup plot.")
         return
     df = df.copy()
     df["_cat"] = df.apply(classify_row, axis=1)
     df["_n"] = range(1, len(df) + 1)
-    fig, ax = plt.subplots(figsize=(13, 6))
-    for cat, col, lbl, a, z in [("discard", COLOR_DISCARD, "Discard", .55, 2),
-                                 ("crash", COLOR_CRASH, "Crash", .65, 3),
-                                 ("keep", COLOR_KEEP, "Keep", .85, 4)]:
-        s = df[df["_cat"] == cat]
-        if len(s):
-            _scatter_by_agent(ax, s, "_n", "speedup", col, lbl, a, z)
+    df["_hover"] = df.apply(_hover_text, axis=1)
+
+    fig = go.Figure()
+    _add_scatter_traces(fig, df, "speedup")
+
+    # Running-best frontier
     valid = df[(df["_cat"] == "keep") & df["speedup"].notna()]
     if len(valid):
-        ax.step(valid["_n"], valid["speedup"].cummax(), where="post",
-                color=COLOR_FRONTIER, linewidth=2, alpha=.8, label="Running best", zorder=3)
-    ax.axhline(y=1.0, color=COLOR_BASELINE, linestyle="--", linewidth=1.5,
-               alpha=.7, label="1.0x baseline", zorder=1)
-    _annotate_top3(ax, df[df["_cat"] == "keep"].dropna(subset=["speedup"]),
-                   "_n", "speedup", lower_better=False)
+        frontier = valid["speedup"].cummax()
+        fig.add_trace(go.Scatter(
+            x=valid["_n"], y=frontier, mode="lines",
+            line=dict(color=COLOR_FRONTIER, width=2, shape="hv"),
+            name="Running best", hoverinfo="skip",
+        ))
+
+    # 1.0x baseline
+    fig.add_hline(y=1.0, line_dash="dash", line_color=COLOR_BASELINE,
+                  annotation_text="1.0x baseline", annotation_position="top left")
+
     nt, nk = len(df), (df["_cat"] == "keep").sum()
-    ax.set_xlabel("Experiment #", fontsize=11)
-    ax.set_ylabel("Speedup (higher is better)", fontsize=11)
-    ax.set_title(f"AutoKernel -- Speedup Progress: {nt} experiments, {nk} kept",
-                 fontsize=13, fontweight="bold")
-    ax.legend(loc="upper left", fontsize=9, framealpha=.9)
-    ax.grid(True, alpha=.3)
-    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
-    ax.set_ylim(bottom=0)
-    fig.tight_layout()
-    fig.savefig(SPEEDUP_PNG, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {SPEEDUP_PNG}")
+    fig.update_layout(
+        title=f"AutoKernel -- Speedup Progress: {nt} experiments, {nk} kept",
+        xaxis_title="Experiment #",
+        yaxis_title="Speedup (higher is better)",
+        yaxis=dict(rangemode="tozero"),
+        hovermode="closest",
+        template="plotly_white",
+        height=600, width=1100,
+    )
+    fig.write_html(SPEEDUP_HTML)
+    print(f"Saved: {SPEEDUP_HTML}")
 
 
 # ---------------------------------------------------------------------------
