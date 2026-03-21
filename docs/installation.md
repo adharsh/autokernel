@@ -110,9 +110,41 @@ echo "nsys: OK"
 
 Create validate.py and reference.py based on the provided spec under docs.
 
+### Step 6.1 Smoke test
+
+Replace interface.py by calling reference.py to check if validate.py passes. Then revert changes. This is just to test everything is running smoothly.
+
 ## Step 7. Restart Claude Code to access microbench agent. (Manual)
 
 Restart Claude Code to access microbench agent. This is a manual step.
+
+## Step 8. Launch agents
+
+Auto-detects GPUs and spawns one agent per GPU. Agent 0 uses the repo directly; agents 1+ get their own git worktree.
+
+```bash
+./scripts/launch.sh
+```
+
+Logs go to `agent{N}.log`. PIDs are saved to `.agent_pids`.
+
+```bash
+# Monitor
+tail -f agent*.log
+
+# Stop all
+kill $(cat .agent_pids)
+```
+
+## Step 9. Monitor from Claude Code interactive session (optional)
+
+Open a separate `claude` interactive session in the project root. Use `/loop` to auto-check progress:
+
+```
+/loop 5m Read results.tsv, show the latest rows, plot speedup over time to progress.png, and summarize what's working.
+```
+
+This re-runs every 5 minutes. You can also ask one-off questions or spawn the microbench agent anytime.
 
 ## Profiling permissions (ncu)
 
