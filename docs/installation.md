@@ -146,10 +146,16 @@ Resume uses `claude --continue` to pick up the previous session. The agent reads
 Open a separate `claude` interactive session in the project root. Use `/loop` to auto-check progress:
 
 ```
-/loop 1hr Read results.tsv, show the latest rows, plot speedup over time to progress.png, and summarize what's working.
+/loop 1hr Read results.tsv, show the latest rows, plot speedup over time to progress.png using @analysis.py, and summarize what's working.
 ```
 
 This re-runs every hour. You can also ask one-off questions or spawn the microbench agent anytime.
+
+Also view logs for a given agent via:
+
+```bash
+tail -F agent0.log | jq -r --stream 'select(length==2 and .[0][-1]=="content") | .[1]'
+```
 
 ## Profiling permissions (ncu)
 
