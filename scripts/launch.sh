@@ -59,7 +59,7 @@ for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
       --verbose \
       --allowedTools "Edit" "Write" "Read" "Bash" "Glob" "Grep" "Agent" \
       --permission-mode bypassPermissions \
-      "You were interrupted. Read results/results.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
+      "You were interrupted. Read results/experiments.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
       >> "$LOG" 2>&1 &
   else
     CUDA_VISIBLE_DEVICES=$GPU_ID claude -p \
@@ -78,7 +78,7 @@ done
 echo ""
 echo "All agents launched. Monitor with:"
 echo "  tail -f $LOGS_DIR/agent*.log"
-echo "  cat $RESULTS_DIR/results.tsv | column -t -s\$'\\t'"
+echo "  cat $RESULTS_DIR/experiments.tsv | column -t -s\$'\\t'"
 echo ""
 echo "Stop all agents:"
 echo "  kill \$(cat .agent_pids)"

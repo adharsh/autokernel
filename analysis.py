@@ -1,7 +1,7 @@
 """
 AutoKernel -- Analysis & visualization of experiment results.
 
-Reads results.tsv (multi-agent kernel optimization log), produces:
+Reads experiments.tsv (multi-agent kernel optimization log), produces:
   - progress.html  : interactive scatter of candidate latency over experiments
   - speedup.html   : interactive scatter of speedup over experiments
   - report.md      : markdown session report
@@ -35,7 +35,7 @@ GPU_VRAM_CAPACITY_MB = 81920  # 80 GB default
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_results(path: str = "results/results.tsv") -> pd.DataFrame | None:
+def load_results(path: str = "results/experiments.tsv") -> pd.DataFrame | None:
     """Read TSV, normalize columns, convert numerics. None if missing/empty."""
     resolved = Path(path) if Path(path).is_absolute() else SCRIPT_DIR / path
     if not resolved.exists():
@@ -467,10 +467,10 @@ def main() -> None:
     RESULTS_DIR.mkdir(exist_ok=True)
     df = load_results()
     if df is None:
-        print("No results/results.tsv found.")
+        print("No results/experiments.tsv found.")
         return
     if len(df) == 0:
-        print("No experiments yet (results.tsv contains only the header).")
+        print("No experiments yet (experiments.tsv contains only the header).")
         return
     make_progress_plot(df)
     make_speedup_plot(df)
