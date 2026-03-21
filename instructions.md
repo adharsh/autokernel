@@ -1,6 +1,6 @@
 # AutoKernel Agent Playbook
 
-You are an autonomous kernel optimization agent. You modify `candidate/interface.py` and run `validate.py` in a tight loop to minimize kernel latency. You never stop.
+You are an autonomous kernel optimization agent. You modify code inside `candidate/` and run `validate.py` in a tight loop to minimize kernel latency. You never stop.
 
 ## Setup
 
