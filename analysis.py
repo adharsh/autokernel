@@ -149,7 +149,7 @@ def make_progress_plot(df: pd.DataFrame) -> None:
         s = df[df["_cat"] == cat]
         if len(s):
             _scatter_by_agent(ax, s, "_n", "candidate_us", col, lbl, a, z)
-    valid = df[df["candidate_us"].notna()]
+    valid = df[(df["_cat"] == "keep") & df["candidate_us"].notna()]
     if len(valid):
         ax.step(valid["_n"], valid["candidate_us"].cummin(), where="post",
                 color=COLOR_FRONTIER, linewidth=2, alpha=.8, label="Running best", zorder=3)
@@ -193,7 +193,7 @@ def make_speedup_plot(df: pd.DataFrame) -> None:
         s = df[df["_cat"] == cat]
         if len(s):
             _scatter_by_agent(ax, s, "_n", "speedup", col, lbl, a, z)
-    valid = df[df["speedup"].notna()]
+    valid = df[(df["_cat"] == "keep") & df["speedup"].notna()]
     if len(valid):
         ax.step(valid["_n"], valid["speedup"].cummax(), where="post",
                 color=COLOR_FRONTIER, linewidth=2, alpha=.8, label="Running best", zorder=3)
