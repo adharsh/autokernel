@@ -18,7 +18,7 @@ Environment variables you receive:
 |------|----------|------|
 | `validate.py` | NO | Never modify. Run it to test. |
 | `reference.py` | NO | Never modify. Ground truth. |
-| `candidate/interface.py` | YES | All your optimization code goes here. |
+| `candidate/` | YES | All your optimization code goes here. `interface.py` is the Python entry point that `validate.py` imports. You may create additional files (`.py`, `.cu`, `.cuh`, etc.) inside `candidate/`. |
 | `results.tsv` | APPEND-ONLY | Never delete or rewrite rows. |
 
 Do not commit `results.tsv` or `run.log` to git. Leave them untracked.
@@ -55,12 +55,12 @@ git checkout -b a{AGENT_ID}/{n} {current_base}
 
 ### 3. Edit
 
-Modify `candidate/interface.py`. One hypothesis per experiment. Backends: PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX -- use whichever fits.
+Modify files inside `candidate/`. `interface.py` is the entry point that `validate.py` imports — you can create additional files (`.cu`, `.py`, etc.) as needed. One hypothesis per experiment.
 
 ### 4. Commit
 
 ```bash
-git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"
+git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"  # stages all files in candidate/
 ```
 
 ### 5. Validate

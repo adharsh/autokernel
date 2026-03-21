@@ -1,7 +1,7 @@
-"""Agent-editable optimization code.
+"""Python entry point for the optimized kernel.
 
-All kernel optimization code, bindings, and utilities go here.
-This is the ONLY file the agent modifies during experiments.
+validate.py imports from here. You may create additional files
+(.py, .cu, .cuh, etc.) inside candidate/ as needed.
 """
 
 
