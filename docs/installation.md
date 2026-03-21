@@ -141,10 +141,10 @@ kill $(cat .agent_pids)
 Open a separate `claude` interactive session in the project root. Use `/loop` to auto-check progress:
 
 ```
-/loop 5m Read results.tsv, show the latest rows, plot speedup over time to progress.png, and summarize what's working.
+/loop 1hr Read results.tsv, show the latest rows, plot speedup over time to progress.png, and summarize what's working.
 ```
 
-This re-runs every 5 minutes. You can also ask one-off questions or spawn the microbench agent anytime.
+This re-runs every hour. You can also ask one-off questions or spawn the microbench agent anytime.
 
 ## Profiling permissions (ncu)
 
