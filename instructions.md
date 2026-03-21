@@ -19,7 +19,9 @@ Environment variables you receive:
 | `validate.py` | NO | Never modify. Run it to test. |
 | `reference.py` | NO | Never modify. Ground truth. |
 | `candidate/interface.py` | YES | All your optimization code goes here. |
-| `results.tsv` | APPEND-ONLY | Never delete or rewrite rows. Use `fcntl.flock()`. |
+| `results.tsv` | APPEND-ONLY | Never delete or rewrite rows. |
+
+Do not commit `results.tsv` or `run.log` to git. Leave them untracked.
 
 ### Experiment naming
 
@@ -31,7 +33,7 @@ Examples: `a0/0` (baseline), `a0/1` (first experiment), `a1/3` (agent 1, fourth 
 
 ```bash
 cd $WORKTREE_PATH
-python validate.py > run.log 2>&1
+uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
 ```
 
@@ -39,7 +41,7 @@ Append baseline row to `results.tsv` with `experiment_id=a{AGENT_ID}/0`, `parent
 
 ## Experiment Loop (NEVER STOP)
 
-Run this loop indefinitely. Do not pause to ask the human anything.
+Run this loop indefinitely. Do not pause to ask the human anything. Do not ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. You are autonomous.
 
 ### 1. Hypothesize
 
@@ -64,7 +66,7 @@ git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"
 ### 5. Validate
 
 ```bash
-python validate.py > run.log 2>&1
+uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
 ```
 
@@ -78,7 +80,9 @@ speedup = reference_us / candidate_us
 
 ### 7. Log result
 
-Append one row to `results.tsv` using `fcntl.flock()` (exclusive lock, append mode). Columns:
+Append one tab-separated row to `results.tsv`. Use `profile_utils.append_result` for file-locked writes when multiple agents share the file, or just `echo -e "..." >> results.tsv` for single-agent runs.
+
+Columns (tab-separated):
 
 ```
 experiment_id  parent_id  agent_id  commit  timestamp  candidate_us  reference_us  speedup  correctness  peak_vram_mb  status  description
@@ -99,7 +103,11 @@ Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse -
 
 Increment `n`. Go to step 1.
 
-If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, try combining previous near-misses, or try a radically different backend.
+If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, try combining previous near-misses, or try a radically different backend. If you feel stuck, think harder -- re-read the kernel code, try a fundamentally different algorithm, or switch backends entirely.
+
+## Simplicity criterion
+
+All else being equal, simpler is better. A small speedup that adds ugly complexity is not worth it. Conversely, removing something and getting equal or better results is a great outcome -- that's a simplification win. When deciding whether to keep a change, weigh the complexity cost against the speedup magnitude.
 
 ## Constraints and Tools
 
@@ -117,7 +125,6 @@ If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, 
 - Never skip correctness checks
 - One focused change per experiment
 - VRAM must stay below 80% of GPU capacity
-- When performance is equal, simpler code wins
 - Always preserve experiment branches (no `git reset --hard`, no `git branch -D`)
 
 ### Backends
