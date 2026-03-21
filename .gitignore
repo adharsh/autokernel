@@ -35,6 +35,9 @@ results.tsv
 # Worktrees (created by launch script)
 worktree-a*/
 
+# Agent state files (per-agent JSON state)
+.agent_state/
+
 # IDE
 .vscode/
 .idea/
