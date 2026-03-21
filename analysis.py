@@ -115,19 +115,24 @@ def _annotate_top3(ax, kept, xcol, ycol, lower_better):
 
 
 def _ref_and_best(df, cats):
-    """Extract reference_us and best kept candidate_us."""
+    """Extract best kept candidate_us and best per-row speedup."""
     ref_us = None
     if "reference_us" in df.columns:
         vals = df["reference_us"].dropna()
         if len(vals) > 0:
             ref_us = float(vals.iloc[0])
     best_us = None
+    best_speedup = None
     kept = df[cats == "keep"]
     if "candidate_us" in kept.columns:
         v = kept["candidate_us"].dropna()
         if len(v) > 0:
             best_us = float(v.min())
-    return ref_us, best_us
+    if "speedup" in kept.columns:
+        v = kept["speedup"].dropna()
+        if len(v) > 0:
+            best_speedup = float(v.max())
+    return ref_us, best_us, best_speedup
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +225,7 @@ def make_speedup_plot(df: pd.DataFrame) -> None:
 # Task 9: Suggestions engine
 # ---------------------------------------------------------------------------
 
-def generate_suggestions(df: pd.DataFrame, baseline: float | None,
-                         best: float | None) -> list[str]:
+def generate_suggestions(df: pd.DataFrame, best_speedup: float | None) -> list[str]:
     """Actionable suggestions based on experiment history."""
     suggestions: list[str] = []
     n_total = len(df)
@@ -240,8 +244,8 @@ def generate_suggestions(df: pd.DataFrame, baseline: float | None,
             "Last 5 experiments all discard/crash -- possible plateau. "
             "Try a fundamentally different approach (algorithm, memory layout, "
             "or kernel fusion strategy).")
-    if baseline and best and baseline > 0:
-        spd = baseline / best
+    if best_speedup and best_speedup > 0:
+        spd = best_speedup
         if spd < 1.1:
             suggestions.append(
                 "Speedup is modest (<1.1x). Consider: autotuning block sizes, "
@@ -280,8 +284,7 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
     n_keep = int((cats == "keep").sum())
     n_discard = int((cats == "discard").sum())
     n_crash = int((cats == "crash").sum())
-    ref_us, best_us = _ref_and_best(df, cats)
-    spd = (ref_us / best_us) if (ref_us and best_us and best_us > 0) else None
+    ref_us, best_us, best_speedup = _ref_and_best(df, cats)
 
     print()
     print("=" * 60)
@@ -291,8 +294,8 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
         print(f"\n  Reference latency:     {ref_us:.2f} us")
     if best_us:
         print(f"  Best candidate:        {best_us:.2f} us")
-    if spd:
-        print(f"  Total speedup:         {spd:.2f}x")
+    if best_speedup:
+        print(f"  Best speedup:          {best_speedup:.2f}x")
     kp = (n_keep / n_total * 100) if n_total else 0
     cp = (n_crash / n_total * 100) if n_total else 0
     print(f"\n  Experiments:           {n_total}")
@@ -326,8 +329,13 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
                     v = akd["candidate_us"].dropna()
                     if len(v):
                         ab = float(v.min())
+                agent_spd = None
+                if "speedup" in akd.columns:
+                    v = akd["speedup"].dropna()
+                    if len(v):
+                        agent_spd = float(v.max())
                 bs = f", best {ab:.2f} us" if ab else ""
-                sp = f" ({ref_us/ab:.2f}x)" if (ab and ref_us and ab > 0) else ""
+                sp = f" ({agent_spd:.2f}x)" if agent_spd else ""
                 print(f"    Agent {int(ag)}: {at} experiments, {ak} kept{bs}{sp}")
     print(f"\n{'=' * 60}\n")
 
@@ -374,8 +382,7 @@ def generate_report(df: pd.DataFrame) -> None:
     cats = df.apply(classify_row, axis=1)
     nt = len(df)
     nk, nd, nc = int((cats == "keep").sum()), int((cats == "discard").sum()), int((cats == "crash").sum())
-    ref_us, best_us = _ref_and_best(df, cats)
-    spd = (ref_us / best_us) if (ref_us and best_us and best_us > 0) else None
+    ref_us, best_us, best_speedup = _ref_and_best(df, cats)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     L: list[str] = [
         "# AutoKernel Session Report", "", f"Generated: {ts}", "",
@@ -387,8 +394,8 @@ def generate_report(df: pd.DataFrame) -> None:
         L.append(f"| Reference latency | {ref_us:.2f} us |")
     if best_us:
         L.append(f"| Best candidate latency | {best_us:.2f} us |")
-    if spd:
-        L.append(f"| Speedup | {spd:.2f}x |")
+    if best_speedup:
+        L.append(f"| Best speedup | {best_speedup:.2f}x |")
     L.append("")
 
     kept_df = df[cats == "keep"]
@@ -411,7 +418,7 @@ def generate_report(df: pd.DataFrame) -> None:
         L.append("")
 
     L += ["## Suggestions for Next Session", ""]
-    for s in generate_suggestions(df, ref_us, best_us):
+    for s in generate_suggestions(df, best_speedup):
         L.append(f"- {s}")
     L.append("")
 
