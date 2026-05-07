@@ -352,7 +352,7 @@ cmd_start() {
     : > "$LOG"
 
     _launch_agent start "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. Start the experiment loop now. Never stop. Never ask the user anything."
+      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, inspect the full profiling details and try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Start the experiment loop now. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
@@ -406,7 +406,7 @@ cmd_resume() {
     echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
     _launch_agent resume "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Required: run scripts/profile_ncu.sh for every resumed experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. Never stop. Never ask the user anything."
+      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, inspect the full profiling details and try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"

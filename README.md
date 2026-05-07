@@ -133,10 +133,23 @@ next. `nsys` and the microbench workflow are optional follow-up tools for
 timeline, launch overhead, synchronization, or per-line attribution questions;
 they do not replace the required NCU profile.
 
+Agents must optimize the implementation, not the evaluator. Do not memoize
+answers, cache or replay final outputs, hardcode benchmark results, special-case
+known benchmark/test inputs, detect evaluator behavior, skip correctness paths,
+or use reward hacking. Legitimate compiler, extension, or autotuning artifact
+caches are fine only when they do not cache final answers or depend on
+recognizing the validation case.
+
 Backend choices are explicitly profile-driven. PyTorch, Triton, CUDA C++,
-CUTLASS, CUTE DSL, and PTX are all allowed, but moving lower level should be
-justified by Nsight Compute evidence such as codegen, occupancy, memory
-coalescing, instruction mix, scheduling, or other kernel-level limits.
+CUDA C++ with inline PTX, CUTLASS, CUTE DSL, and PTX are all allowed, but moving
+lower level should be justified by Nsight Compute evidence such as codegen,
+occupancy, memory coalescing, instruction mix, scheduling, or other kernel-level
+limits.
+
+If an obvious speedup is not available, inspect deeper profiling details before
+moving on: kernel timelines, memory traffic, occupancy, launch overhead,
+synchronization, cache behavior, instruction mix, data movement, generated
+PTX/SASS/cubin, and algorithmic hotspots.
 
 PTX/SASS inspection is optional by default and required when NCU points at a
 codegen or instruction-level limiter. Prefer SASS/cubin disassembly when

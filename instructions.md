@@ -27,6 +27,18 @@ Environment variables you receive:
 
 Do not commit `results/` to git. Leave it untracked.
 
+## Submission Integrity
+
+Optimize the implementation, not the evaluator. Do not memoize answers, cache or
+replay final outputs, hardcode benchmark results, special-case known
+benchmark/test inputs, detect evaluator behavior, skip correctness paths, or use
+any other form of reward hacking. Submissions must be honest, general
+implementations that preserve correctness for unseen valid inputs matching the
+reference contract.
+
+Legitimate compiler, extension, or autotuning artifact caches are allowed when
+they do not cache final answers or depend on recognizing the validation case.
+
 ### Experiment naming
 
 Format: `a{agent_id}/{experiment_number}` -- used as branch name, experiment_id, and lookup key.
@@ -95,11 +107,11 @@ multi-kernel timeline behavior, or line-by-line attribution. They complement
 NCU; they do not replace the required NCU pass.
 
 Backend choices must be driven by profiling. Use PyTorch, Triton, CUDA C++,
-CUTLASS, CUTE DSL, or PTX as appropriate, but only after stating what the latest
-NCU profile says is limiting progress and why that backend is the right response.
-If NCU shows compiler/codegen, instruction selection, occupancy, memory
-coalescing, or scheduling limits that require lower-level control, move lower in
-the stack.
+CUDA C++ with inline PTX, CUTLASS, CUTE DSL, or PTX as appropriate, but only
+after stating what the latest NCU profile says is limiting progress and why that
+backend is the right response. If NCU shows compiler/codegen, instruction
+selection, occupancy, memory coalescing, memory layout, synchronization, or
+scheduling limits that require lower-level control, move lower in the stack.
 
 PTX/SASS inspection is profile-triggered, not mandatory for every experiment.
 Inspect generated PTX, cubin, or SASS when NCU suggests a codegen or
@@ -240,8 +252,8 @@ latency/occupancy, launch overhead, or framework overhead limited.
 
 ## Design Decision From Profile
 What the NCU evidence says to try next, including whether to stay in the current
-backend or move lower level: PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, or
-PTX.
+backend or move lower level: PyTorch, Triton, CUDA C++, CUDA C++ with inline
+PTX, CUTLASS, CUTE DSL, or PTX.
 
 ## Codegen/PTX/SASS
 State whether PTX/SASS/cubin was inspected. If yes, list artifact paths and the
@@ -278,11 +290,20 @@ The reported `candidate_us` and calibrated `reference_us` both correspond to the
 
 Increment `n`. Go to step 1.
 
+If an obvious speedup is not available, dig deeper into the profiling evidence
+instead of making cosmetic edits. Inspect the full details that apply: kernel
+timelines, memory traffic, occupancy, launch overhead, synchronization, cache
+behavior, instruction mix, data movement, shape distributions, generated
+PTX/SASS/cubin, and algorithmic hotspots.
+
 If you run out of ideas: re-read recent NCU reports and notes first. Then use
 `nsys` or the microbench agent/skill for the specific unanswered question, try
 combining previous near-misses, or try a radically different backend. If you feel
 stuck, think harder -- re-read the kernel code, try a fundamentally different
-algorithm, or switch backends entirely, but anchor the reason in profiling.
+algorithm, use lower-level CUDA/Triton/PTX mechanisms, including inline PTX when
+justified, or switch backends entirely. Anchor every attempt in profiling. A
+slower or failed experiment is still useful evidence: document the bottleneck,
+the implementation attempt, why it failed or regressed, and continue.
 
 ## Simplicity criterion
 
@@ -301,6 +322,7 @@ All else being equal, simpler is better. A small speedup that adds ugly complexi
 ### Constraints
 
 - Never modify `validate.py` or `reference.py`
+- Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment
@@ -309,6 +331,6 @@ All else being equal, simpler is better. A small speedup that adds ugly complexi
 
 ### Backends
 
-Use whichever is appropriate: PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX.
-The appropriate backend is the one justified by the latest NCU evidence and the
-explicit speed-of-light gap in the experiment notes.
+Use whichever is appropriate: PyTorch, Triton, CUDA C++, CUDA C++ with inline
+PTX, CUTLASS, CUTE DSL, PTX. The appropriate backend is the one justified by the
+latest NCU evidence and the explicit speed-of-light gap in the experiment notes.

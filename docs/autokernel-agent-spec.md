@@ -295,10 +295,11 @@ shows a timeline/launch/synchronization question or when per-line attribution is
 needed. They complement the required NCU profile and do not replace it.
 
 Backend selection is downstream of profiling. Agents may use PyTorch, Triton,
-CUDA C++, CUTLASS, CUTE DSL, or PTX, but the chosen level must be justified by
-the measured limiter. If NCU shows compiler/codegen, instruction selection,
-occupancy, coalescing, scheduling, or other kernel-level limits that require
-lower-level control, agents should move lower in the stack.
+CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE DSL, or PTX, but the chosen
+level must be justified by the measured limiter. If NCU shows compiler/codegen,
+instruction selection, occupancy, coalescing, memory layout, synchronization,
+scheduling, or other kernel-level limits that require lower-level control,
+agents should move lower in the stack.
 
 PTX/SASS inspection is part of that escalation path. It is not a replacement for
 NCU and should not be forced on every experiment; it is required when the NCU
@@ -488,11 +489,20 @@ Every experiment's branch is preserved regardless of outcome. To inspect any exp
 ### Tools available
 You have access to: `ncu`, `scripts/profile_ncu.sh`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. `scripts/profile_ncu.sh` is required for every baseline and experiment that launches kernels. Use `nsys` and microbench profiling for specific follow-up questions raised by NCU.
 
+### Submission integrity
+Agents optimize the implementation, not the evaluator. They must not memoize
+answers, cache or replay final outputs, hardcode benchmark results, special-case
+known benchmark/test inputs, detect evaluator behavior, skip correctness paths,
+or use reward hacking. Legitimate compiler, extension, or autotuning artifact
+caches are allowed only when they do not cache final answers or depend on
+recognizing the validation case.
+
 ### Optimization strategy
-Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is most appropriate for the measured limiter. Keep changes focused — one hypothesis per experiment. Backend changes must cite the latest NCU speed-of-light gap and limiting factor.
+Use whichever backend (PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE DSL, PTX) is most appropriate for the measured limiter. Keep changes focused — one hypothesis per experiment. Backend changes must cite the latest NCU speed-of-light gap and limiting factor. If an obvious speedup is not available, agents must inspect deeper profiling details and try justified lower-level changes before moving on.
 
 ### Constraints
 - Never modify `validate.py` or `reference.py`
+- Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment
