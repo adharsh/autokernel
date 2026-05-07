@@ -124,6 +124,12 @@ Agents append through `scripts/record_result.py`, which uses file locking and
 the shared root `results/experiments.tsv`. Worktree `results/` paths are
 symlinked to the root results directory when agents launch.
 
+`results/experiments.tsv` is the compact machine-readable index. Detailed
+experiment memory lives in `results/notes/`, with one Markdown note per
+experiment, for example `results/notes/a0_1.md` for `a0/1`. The TSV row is the
+source of truth and should be written for every experiment; notes are shared
+learning context and should be written when possible.
+
 ## Profiling Permissions
 
 `nsys` usually works without extra permissions. `ncu` hardware counters may require:

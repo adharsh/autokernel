@@ -7,7 +7,7 @@ set -euo pipefail
 # - optional uv sync
 # - Claude/Codex microbench discovery links
 # - root validate.py/reference.py from templates when missing
-# - results/experiments.tsv initialization
+# - results/experiments.tsv and results/notes initialization
 # - calibrated reference timing reminder
 # - optional lightweight environment checks
 #
@@ -17,6 +17,7 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TEMPLATE_DIR="$ROOT/docs/templates"
 RESULTS_DIR="$ROOT/results"
+NOTES_DIR="$RESULTS_DIR/notes"
 TSV="$RESULTS_DIR/experiments.tsv"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
 CODEX_HOME=${CODEX_HOME:-"$HOME/.codex"}
@@ -134,8 +135,15 @@ init_results_tsv() {
 
   echo "init: $TSV"
   if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$RESULTS_DIR"
+    mkdir -p "$RESULTS_DIR" "$NOTES_DIR"
     printf "%s\n" "$TSV_HEADER" > "$TSV"
+  fi
+}
+
+init_notes_dir() {
+  echo "ok: $NOTES_DIR"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    mkdir -p "$NOTES_DIR"
   fi
 }
 
@@ -206,6 +214,7 @@ setup_microbench_links
 copy_template validate.py
 copy_template reference.py
 init_results_tsv
+init_notes_dir
 
 if [ "$DO_VERIFY" -eq 1 ]; then
   run_checks

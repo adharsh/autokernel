@@ -16,6 +16,7 @@ autokernel/
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
 ├── results/
 │   ├── experiments.tsv      # Shared, append-only experiment log (tab-separated)
+│   ├── notes/               # Shared detailed Markdown notes, one per experiment
 │   └── reference_timing.json # Calibrated reference timing for the stress case
 ├── analysis.py              # Plotting + reports from results/experiments.tsv
 ├── profile_utils.py         # cuda_timer, cpu_timer, shared profiling utilities
@@ -35,6 +36,7 @@ autokernel/
 | `candidate/interface.py` | Agent | All optimization code lives here |
 | `candidate/__init__.py` | Agent | Exports from interface.py |
 | `results/experiments.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
+| `results/notes/*.md` | Agent (append-only) | Detailed notes when possible. Never delete or rewrite existing notes |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |
 
@@ -76,6 +78,29 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 | `description` | string | `fuse norm+proj` | Short description of what was tried |
 
 **Concurrency**: Multiple agents append to the same file. Use `scripts/record_result.py`, which calls `profile_utils.append_result()` and uses `fcntl.flock()` for atomic writes. Agents must not use `echo >>` for experiment rows.
+
+## 2.1 Experiment Notes
+
+`results/experiments.tsv` is the compact index. Detailed shared memory lives in
+`results/notes/`, with deterministic filenames derived from experiment IDs:
+
+| Experiment | Note path |
+|------------|-----------|
+| `a0/1` | `results/notes/a0_1.md` |
+| `a7/23` | `results/notes/a7_23.md` |
+
+Each note should include:
+
+- `## Hypothesis`
+- `## Change`
+- `## Result`
+- `## Lessons`
+- `## Followups`
+
+TSV rows are the source of truth and must be recorded for every experiment.
+Notes are shared learning context and should be written when possible. This
+keeps the TSV compact while giving agents context to avoid repeating failed
+ideas and to build on successful ones.
 
 ---
 
@@ -324,20 +349,22 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 
 ### Experiment loop (NEVER STOP — run indefinitely)
 ```
-1. Hypothesize one focused optimization change
-2. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
+1. Read shared experiments.tsv and recent/best notes
+2. Hypothesize one focused optimization change
+3. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
 6. Run: uv run python validate.py → extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
-7. Compute speedup = reference_us / candidate_us
-8. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
-9. If correctness == PASS and speedup > previous best:
+7. Compute speedup = reference_us / candidate_us and decide status
+8. Write results/notes/a{id}_{n}.md
+9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
+10. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)
    Else (fail, crash, or correct but slower):
      status = "discard" or "crash"
      git checkout {current_base}            # go back to last keep
-10. Repeat from step 1
+11. Repeat from step 1
 ```
 
 Every experiment's branch is preserved regardless of outcome. To inspect any experiment later: `git checkout a{id}/{n}` or `git show a{id}/{n}:candidate/interface.py`.
@@ -497,8 +524,8 @@ def read_results(csv_path: str) -> list[dict]:
 
 ### First-time setup (human runs once)
 ```bash
-# Initialize results/experiments.tsv with header
-mkdir -p results
+# Initialize results/experiments.tsv with header and create note directory
+mkdir -p results/notes
 printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work
