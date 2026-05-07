@@ -55,7 +55,21 @@ Before launching agents, populate these files:
 Root `reference.py` and `validate.py` are task-specific. Reusable harness
 policy belongs in `docs/templates/` so future tasks inherit it.
 
-This is a good step to do with an AI coding tool before starting the autonomous agents. Give the tool the target function, expected shapes, dtypes, edge cases, and desired output layout, then ask it to fill `reference.py` and `validate.py`.
+This is a good step to do with an AI coding tool before starting the autonomous agents. A minimal handoff prompt is enough:
+
+```text
+Read README.md and the codebase. Set up this AutoKernel task, but do not launch agents.
+
+Reference implementation:
+...
+```
+
+The setup tool should follow this README, fill the task files, run reference
+calibration and validation, run the NCU smoke check if the environment supports
+it, commit the task setup, stop before `./scripts/agents.sh start`, and report
+the commands it ran plus any blockers.
+
+Give the setup tool the target function, expected shapes, dtypes, edge cases, and desired output layout if they are not obvious from the reference implementation.
 
 For example, ask it to:
 
