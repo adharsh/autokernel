@@ -1,18 +1,27 @@
 # AutoKernel
 
-AutoKernel is a scaffold for running autonomous GPU kernel optimization agents against a fixed validation harness.
+AutoKernel is a scaffold for running autonomous GPU kernel optimization agents
+against a fixed validation harness.
 
-The main workflow is:
+This README is ordered for setup. Follow it from top to bottom when creating a
+new task. Do not launch agents until the task files have been populated,
+validated, profiled with the smoke check, and committed.
 
-1. Set up the repo.
-2. Fill in the task-specific reference and validation files.
-3. Smoke test the task.
-4. Calibrate the reference timing.
-5. Confirm `ncu` profiling permissions.
-6. Commit the task setup so worktrees can see it.
-7. Launch one optimization agent per GPU.
+## AI Handoff Boundary
 
-## Prerequisites
+An AI coding tool can complete sections 1 through 6 in order: repo setup, task
+definition, reference calibration, validation, profiling smoke check, and the
+setup commit. The AI setup tool must stop after reporting the commands run,
+metrics, commit hash, and blockers.
+
+Sections 7 and 8 are human-only. Launching and operating long-running agents is
+a human action, so an AI setup tool must not run `./scripts/agents.sh start`.
+
+To hand off a new task, tell the LLM to read this README and provide the
+reference implementation. Also provide expected shapes, dtypes, edge cases, and
+desired output layout if they are not obvious from the reference implementation.
+
+## 1. Prerequisites
 
 - NVIDIA GPU host with CUDA Toolkit 12.x
 - `nvidia-smi`, `ncu`, and `nsys` on `PATH`
@@ -25,7 +34,9 @@ Install uv if needed:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-## Quick Start
+## 2. Set Up The Repo
+
+From a fresh checkout:
 
 ```bash
 git clone <repo-url> autokernel
@@ -33,7 +44,16 @@ cd autokernel
 ./scripts/setup.sh --sync --verify
 ```
 
-`setup.sh` installs/syncs the uv environment, links the microbench workflow for Claude Code and Codex, creates `reference.py` and `validate.py` from templates when missing, and initializes `results/experiments.tsv`.
+For an existing checkout, still run the setup command from the repo root before
+editing task files:
+
+```bash
+./scripts/setup.sh --sync --verify
+```
+
+`setup.sh` installs/syncs the uv environment, links the microbench workflow for
+Claude Code and Codex, creates `reference.py` and `validate.py` from templates
+when missing, and initializes `results/experiments.tsv`.
 
 Useful setup options:
 
@@ -42,9 +62,13 @@ Useful setup options:
 ./scripts/setup.sh --force
 ```
 
-## Task Setup
+If setup fails because dependencies need to be downloaded or the environment
+blocks access to a cache directory, stop and report that blocker. Retry only with
+an explicit writable cache or approved network/filesystem access.
 
-Before launching agents, populate these files:
+## 3. Define The Task
+
+Populate these files only after `./scripts/setup.sh --sync --verify` completes:
 
 | File | Purpose |
 |------|---------|
@@ -52,59 +76,118 @@ Before launching agents, populate these files:
 | `validate.py` | Fixed correctness, timing, and input test cases. |
 | `candidate/interface.py` | Starting optimization entry point exposed as `kernel_fn`. |
 
-Root `reference.py` and `validate.py` are task-specific. Reusable harness
-policy belongs in `docs/templates/` so future tasks inherit it.
+Root `reference.py` and `validate.py` are task-specific. Reusable harness policy
+belongs in `docs/templates/` so future tasks inherit it.
 
-This is a good step to do with an AI coding tool before starting the autonomous agents. A minimal handoff prompt is enough:
+Validation requirements:
 
-```text
-Read README.md and the codebase. Set up this AutoKernel task, but do not launch agents.
+- Put the trusted implementation in `reference.kernel_fn`.
+- Define exactly one stress/benchmark case in `validate.py`; this same case is
+  used for calibrated reference timing and candidate timing.
+- Build separate correctness-only cases for representative shapes and edge
+  cases.
+- Compare all returned outputs, including state tensors.
+- Keep the printed labels stable: `candidate_us`, `reference_us`,
+  `correctness`, `peak_vram_mb`.
+- Keep timing and correctness roles separate. Correctness-only cases broaden
+  coverage but must not change the reported timing case.
 
-Reference implementation:
-...
-```
+## 4. Calibrate And Validate
 
-The setup tool should follow this README, fill the task files, run reference
-calibration and validation, run the NCU smoke check if the environment supports
-it, commit the task setup, stop before `./scripts/agents.sh start`, and report
-the commands it ran plus any blockers.
-
-Give the setup tool the target function, expected shapes, dtypes, edge cases, and desired output layout if they are not obvious from the reference implementation.
-
-For example, ask it to:
-
-- put the trusted implementation in `reference.kernel_fn`
-- define exactly one stress/benchmark case in `validate.py`; this same case is used for calibrated reference timing and candidate timing
-- build separate correctness-only cases for representative shapes and edge cases
-- compare both returned outputs and final state tensors
-- keep the printed labels stable: `candidate_us`, `reference_us`, `correctness`, `peak_vram_mb`
-
-Keep the timing and correctness roles separate:
-
-- The stress/benchmark case should be the performance target agents optimize. Calibrate `reference_us` on this case once, then time every candidate on this same case.
-- Correctness-only cases should broaden coverage without changing the reported timing. Use them for edge cases like optional arguments, width variants, reset-mask behavior, activations, and small shapes.
-
-Run the smoke test:
+After task files are populated, run:
 
 ```bash
 uv run python scripts/calibrate_reference.py
 uv run python validate.py
 ```
 
-`validate.py` still runs the reference implementation for correctness, but uses
-the calibrated `results/reference_timing.json` value for the printed `reference_us`
-metric. This keeps speedup reporting stable across agent experiments.
+`scripts/calibrate_reference.py` times `reference.kernel_fn` once on the single
+stress benchmark case and stores `results/reference_timing.json`.
 
-Commit the task setup before running multiple agents:
+`validate.py` still runs the reference implementation for correctness, but uses
+the calibrated `results/reference_timing.json` value for the printed
+`reference_us` metric. This keeps speedup reporting stable across agent
+experiments.
+
+## 5. Check Profiling
+
+Confirm Nsight Compute can run before launching agents:
+
+```bash
+scripts/profile_ncu.sh smoke-test
+```
+
+If this fails because hardware counters are restricted, see
+[Profiling Permissions](#profiling-permissions).
+
+## 6. Commit The Task Setup
+
+Commit the fixed task setup before running multiple agents:
 
 ```bash
 git add validate.py reference.py candidate/
 git commit -m "task setup"
 ```
 
-Git worktrees only contain tracked files, so untracked `validate.py` or `reference.py` files will not be visible to secondary agents.
+Git worktrees only contain tracked files, so untracked `validate.py` or
+`reference.py` files will not be visible to secondary agents.
 
-Restart Claude Code and/or Codex after setup so the microbench agent/skill is discovered.
+Restart Claude Code and/or Codex after setup so the microbench agent/skill is
+discovered.
+
+## 7. Launch Agents
+
+Human-only step. Launch agents only after setup, validation, profiling smoke
+check, and commit are complete.
+
+Codex is the default backend. It launches with `gpt-5.5` at `xhigh` effort:
+
+```bash
+./scripts/agents.sh start
+```
+
+Use Claude instead:
+
+```bash
+AGENT_CLI=claude ./scripts/agents.sh start
+```
+
+Claude launches with `claude-opus-4-7` at `high` effort.
+
+The launcher detects GPUs with `nvidia-smi` and starts one agent per GPU. Agent
+0 runs in the repo root; agents 1+ run in separate git worktrees.
+
+## 8. Operate
+
+Human-only step.
+
+```bash
+./scripts/agents.sh status
+./scripts/agents.sh stop
+./scripts/agents.sh resume
+tail -F results/logs/agent0.log
+uv run python scripts/format_results.py --sort agent
+uv run python analysis.py
+```
+
+Analysis outputs are written under `results/`.
+Agents append through `scripts/record_result.py`, which uses file locking and
+the shared root `results/experiments.tsv`. Worktree `results/` paths are
+symlinked to the root results directory when agents launch. Crash rows are still
+recorded even when validation fails before printing metrics; missing timing and
+VRAM fields are written as `nan`, and missing correctness is written as `CRASH`.
+
+`results/experiments.tsv` is the compact machine-readable index. Detailed
+experiment memory lives under one folder per experiment, for example
+`results/experiments/a0_1/` for `a0/1`. The TSV row is the source of truth and
+should be written for every experiment; `note.md`, `run.log`, NCU reports, and
+optional artifacts live under the per-experiment folder. `analysis.py` audits
+this coverage and flags notes that are missing the required NCU, speed-of-light,
+design-decision, or codegen/PTX/SASS sections.
+
+Keep `results/experiments.tsv` as raw tab-separated data. Use
+`scripts/format_results.py` for aligned human-readable output; do not pad or
+manually edit the TSV.
 
 ## Profiling Policy
 
@@ -153,61 +236,14 @@ PTX/SASS/cubin, and algorithmic hotspots.
 
 PTX/SASS inspection is optional by default and required when NCU points at a
 codegen or instruction-level limiter. Prefer SASS/cubin disassembly when
-available because it is closer to executed machine code than PTX. When inspected,
-save artifacts under `results/experiments/<experiment>/codegen/` and record the
-finding in the experiment note.
-
-## Launch Agents
-
-Codex is the default backend. It launches with `gpt-5.5` at `xhigh` effort:
-
-```bash
-./scripts/agents.sh start
-```
-
-Use Claude instead:
-
-```bash
-AGENT_CLI=claude ./scripts/agents.sh start
-```
-
-Claude launches with `claude-opus-4-7` at `high` effort.
-
-The launcher detects GPUs with `nvidia-smi` and starts one agent per GPU. Agent 0 runs in the repo root; agents 1+ run in separate git worktrees.
-
-## Operate
-
-```bash
-./scripts/agents.sh status
-./scripts/agents.sh stop
-./scripts/agents.sh resume
-tail -F results/logs/agent0.log
-uv run python scripts/format_results.py --sort agent
-uv run python analysis.py
-```
-
-Analysis outputs are written under `results/`.
-Agents append through `scripts/record_result.py`, which uses file locking and
-the shared root `results/experiments.tsv`. Worktree `results/` paths are
-symlinked to the root results directory when agents launch. Crash rows are still
-recorded even when validation fails before printing metrics; missing timing and
-VRAM fields are written as `nan`, and missing correctness is written as `CRASH`.
-
-`results/experiments.tsv` is the compact machine-readable index. Detailed
-experiment memory lives under one folder per experiment, for example
-`results/experiments/a0_1/` for `a0/1`. The TSV row is the source of truth and
-should be written for every experiment; `note.md`, `run.log`, NCU reports, and
-optional artifacts live under the per-experiment folder. `analysis.py` audits
-this coverage and flags notes that are missing the required NCU, speed-of-light,
-design-decision, or codegen/PTX/SASS sections.
-
-Keep `results/experiments.tsv` as raw tab-separated data. Use
-`scripts/format_results.py` for aligned human-readable output; do not pad or
-manually edit the TSV.
+available because it is closer to executed machine code than PTX. When
+inspected, save artifacts under `results/experiments/<experiment>/codegen/` and
+record the finding in the experiment note.
 
 ## Profiling Permissions
 
-`nsys` usually works without extra permissions. `ncu` hardware counters may require:
+`nsys` usually works without extra permissions. `ncu` hardware counters may
+require:
 
 ```bash
 sudo tee /etc/modprobe.d/nvidia-profiling.conf <<'EOF'
