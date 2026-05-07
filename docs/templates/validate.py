@@ -11,6 +11,7 @@ peak_vram_mb
 Design contract:
 - Define exactly one stress benchmark case. It is the only case used for
   calibrated reference timing and candidate timing.
+- Expose that stress case through `make_stress_inputs()`.
 - Define separate correctness-only cases for edge coverage. These cases compare
   candidate outputs to reference outputs but do not affect reported timing.
 - `reference_us` is loaded from `results/reference_timing.json`, produced by
@@ -36,8 +37,15 @@ from reference import kernel_fn as reference_kernel_fn
 
 RTOL = 1e-2
 ATOL = 1e-2
-CANDIDATE_WARMUP = 10
-CANDIDATE_ITERS = 100
+DEFAULT_CANDIDATE_WARMUP = 20
+DEFAULT_CANDIDATE_ITERS = 200
+
+CANDIDATE_WARMUP = int(
+    os.environ.get("AUTOKERNEL_CANDIDATE_WARMUP", DEFAULT_CANDIDATE_WARMUP)
+)
+CANDIDATE_ITERS = int(
+    os.environ.get("AUTOKERNEL_CANDIDATE_ITERS", DEFAULT_CANDIDATE_ITERS)
+)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_REFERENCE_TIMING_PATH = ROOT / "results" / "reference_timing.json"
@@ -85,7 +93,7 @@ def make_case(spec: CaseSpec) -> tuple[Any, ...]:
     raise NotImplementedError("Fill in task-specific input construction")
 
 
-def make_inputs() -> tuple[Any, ...]:
+def make_stress_inputs() -> tuple[Any, ...]:
     """Create the single stress case used for candidate and reference timing."""
     return make_case(STRESS_BENCHMARK_CASE)
 
@@ -198,7 +206,7 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()
 
     correctness = check_correctness()
-    bench_args = make_inputs()
+    bench_args = make_stress_inputs()
     with torch.no_grad():
         reference_us = calibrated_reference_us()
         candidate_us = time_us(lambda: candidate_kernel_fn(*bench_args))

@@ -93,18 +93,20 @@ def cpu_timer(
     """
     import torch
 
+    should_sync_cuda = sync_cuda and torch.cuda.is_available()
+
     for _ in range(warmup):
         fn(*args, **kwargs)
-    if sync_cuda and torch.cuda.is_available():
+    if should_sync_cuda:
         torch.cuda.synchronize()
 
     timings: list[float] = []
     for _ in range(iters):
-        if sync_cuda and torch.cuda.is_available():
+        if should_sync_cuda:
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         fn(*args, **kwargs)
-        if sync_cuda and torch.cuda.is_available():
+        if should_sync_cuda:
             torch.cuda.synchronize()
         timings.append((time.perf_counter() - t0) * 1000)  # ms
 

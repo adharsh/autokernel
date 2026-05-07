@@ -15,6 +15,16 @@ Environment variables you receive:
 | `AUTOKERNEL_EXPERIMENTS_DIR` | `/path/to/results/experiments` | Per-experiment artifact root. Write detailed files under one folder per experiment. |
 | `AUTOKERNEL_REFERENCE_TIMING_PATH` | `/path/to/results/reference_timing.json` | Calibrated reference runtime used by `validate.py`. |
 
+Optional timing overrides:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTOKERNEL_CANDIDATE_WARMUP` | `20` | Candidate validation warmup calls. |
+| `AUTOKERNEL_CANDIDATE_ITERS` | `200` | Candidate validation measured calls. |
+| `AUTOKERNEL_REFERENCE_WARMUP` | `20` | Reference calibration warmup calls. |
+| `AUTOKERNEL_REFERENCE_ITERS` | `200` | Reference calibration measured calls. |
+| `AUTOKERNEL_NCU_WARMUP` | candidate warmup | Warmup calls before the single profiled candidate invocation. |
+
 ### File rules
 
 | File | Mutable? | Rule |
@@ -89,9 +99,12 @@ This runs `ncu --set full --target-processes all` and writes:
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
 
 The normal `validate.py` pass is still the source of `candidate_us`,
-`reference_us`, correctness, and VRAM. The NCU pass is for evidence: speed of
-light analysis, achieved SM/memory throughput, occupancy, launch/runtime
-behavior, instruction mix, memory traffic, and dominant stall reasons.
+`reference_us`, correctness, and VRAM. By default the NCU helper does not run
+the full validation timing loop; it runs `scripts/profile_candidate_once.py`,
+warms up the candidate, then profiles one candidate invocation using CUDA
+profiler start/stop markers. The NCU pass is for evidence: speed of light
+analysis, achieved SM/memory throughput, occupancy, launch/runtime behavior,
+instruction mix, memory traffic, and dominant stall reasons.
 
 Before the first optimization pass for a task, read NVIDIA's official Nsight
 Compute documentation and Kernel Profiling Guide. Use them as the interpretation
@@ -275,7 +288,7 @@ experiment_id  parent_id  agent_id  commit  timestamp  candidate_us  reference_u
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
 `reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments.
-The reported `candidate_us` and calibrated `reference_us` both correspond to the single stress benchmark case from `validate.make_inputs()`. Correctness-only cases are broader coverage and do not affect the reported timing case.
+The reported `candidate_us` and calibrated `reference_us` both correspond to the single stress benchmark case from `validate.make_stress_inputs()`. Correctness-only cases are broader coverage and do not affect the reported timing case.
 
 ### 11. Keep or discard
 

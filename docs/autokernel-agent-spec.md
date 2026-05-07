@@ -32,6 +32,7 @@ autokernel/
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
     ├── calibrate_reference.py # One-time reference timing calibration
+    ├── profile_candidate_once.py # Single warmed-up candidate profile target
     ├── profile_ncu.sh        # Required per-experiment Nsight Compute profiling
     ├── record_result.py      # File-locked experiment row appender
     └── setup.sh             # Local setup helper
@@ -55,6 +56,7 @@ autokernel/
 `validate.py` separates timing from correctness:
 
 - It defines exactly one stress benchmark case. This is the performance target.
+- `validate.make_stress_inputs()` exposes that exact timing case.
 - `scripts/calibrate_reference.py` times `reference.kernel_fn` on that stress case once and writes `results/reference_timing.json`.
 - Every `validate.py` run times `candidate.kernel_fn` on that same stress case and prints the calibrated `reference_us`.
 - Correctness-only cases broaden behavioral coverage but do not change the reported `candidate_us` or `reference_us` timing case.
@@ -269,7 +271,7 @@ scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
 The helper runs:
 
 ```bash
-ncu --set full --target-processes all --kernel-name-base demangled ...
+ncu --set full --target-processes all --kernel-name-base demangled --profile-from-start off ...
 ```
 
 and stores:
@@ -278,10 +280,14 @@ and stores:
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
 
 The raw `validate.py` pass remains the source of timing/correctness values for
-`results/experiments.tsv`; NCU is used to explain why the timing happened. Design
-decisions must cite the latest NCU evidence, especially speed-of-light metrics,
-SM and memory throughput, occupancy, memory traffic, instruction mix, dominant
-stall reasons, and launch/runtime behavior.
+`results/experiments.tsv`; NCU is used to explain why the timing happened. With
+the default command, `scripts/profile_ncu.sh` profiles
+`scripts/profile_candidate_once.py`, which calls `validate.make_stress_inputs()`,
+warms up the candidate, starts CUDA profiling, runs one candidate invocation,
+synchronizes, and stops profiling. Design decisions must cite the latest NCU
+evidence, especially speed-of-light metrics, SM and memory throughput,
+occupancy, memory traffic, instruction mix, dominant stall reasons, and
+launch/runtime behavior.
 
 Before the first optimization pass for a task, agents should read NVIDIA's
 official Nsight Compute documentation and Kernel Profiling Guide and use them as
@@ -360,7 +366,7 @@ The microbench agent follows the patterns established in `xllm/benchmarks/`. Key
 
 **`xllm/benchmarks/utils.py`** — Timer utilities:
 - `cuda_timer(fn, *args, warmup=10, iters=100)` — CUDA event-based GPU timing
-- `make_inputs(batch_size, seq_len, model_dim)` — input tensor factory
+- input tensor factories for benchmark cases
 - formatted output helpers for comparing benchmark cases
 - `save_results(all_results, path)` — JSON/CSV export
 
@@ -721,7 +727,7 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="basel
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
 | 2 | `profile_utils.py` | `profile_utils.py` | `cuda_timer`, `cpu_timer`, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Required NCU profile helper | `scripts/profile_ncu.sh` | Standard extensive Nsight Compute profile for every baseline and experiment |
+| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py` | Standard extensive Nsight Compute profile for every baseline and experiment |
 | 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
 | 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
 | 7 | Results TSV init | Part of setup | Header row creation + baseline recording |

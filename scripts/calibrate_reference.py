@@ -13,6 +13,8 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "results" / "reference_timing.json"
+DEFAULT_REFERENCE_WARMUP = 20
+DEFAULT_REFERENCE_ITERS = 200
 sys.path.insert(0, str(ROOT))
 
 import validate  # noqa: E402
@@ -21,8 +23,20 @@ from reference import kernel_fn as reference_kernel_fn  # noqa: E402
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--iters", type=int, default=200)
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=int(
+            os.environ.get("AUTOKERNEL_REFERENCE_WARMUP", DEFAULT_REFERENCE_WARMUP)
+        ),
+    )
+    parser.add_argument(
+        "--iters",
+        type=int,
+        default=int(
+            os.environ.get("AUTOKERNEL_REFERENCE_ITERS", DEFAULT_REFERENCE_ITERS)
+        ),
+    )
     parser.add_argument(
         "--allow-cpu",
         action="store_true",
@@ -44,7 +58,7 @@ def main() -> None:
             "--allow-cpu only for local CPU smoke tests."
         )
 
-    bench_args = validate.make_inputs()
+    bench_args = validate.make_stress_inputs()
 
     with torch.no_grad():
         reference_us = validate.time_us(

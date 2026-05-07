@@ -20,7 +20,11 @@ Runs:
   ncu --set full --target-processes all --kernel-name-base demangled ...
 
 If command is omitted, defaults to:
-  uv run python validate.py
+  uv run python scripts/profile_candidate_once.py
+
+The default target warms up the candidate and uses CUDA profiler markers so
+Nsight Compute profiles one candidate invocation from the current worktree, not
+the full validation loop.
 EOF
 }
 
@@ -37,12 +41,12 @@ fi
 EXPERIMENT_ID="$1"
 shift
 
-if [ "$#" -eq 0 ]; then
-  set -- uv run python validate.py
-fi
-
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=${AUTOKERNEL_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}
+TARGET_ROOT=${AUTOKERNEL_PROFILE_TARGET_ROOT:-$PWD}
+if [ ! -f "$TARGET_ROOT/validate.py" ]; then
+  TARGET_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+fi
 RESULTS_DIR=${AUTOKERNEL_RESULTS_DIR:-"$ROOT/results"}
 EXPERIMENTS_DIR=${AUTOKERNEL_EXPERIMENTS_DIR:-"$RESULTS_DIR/experiments"}
 SAFE_ID=${EXPERIMENT_ID//\//_}
@@ -50,6 +54,12 @@ EXPERIMENT_DIR="$EXPERIMENTS_DIR/$SAFE_ID"
 NCU_DIR="$EXPERIMENT_DIR/ncu"
 REPORT_BASENAME="$NCU_DIR/profile"
 LOG_PATH="$NCU_DIR/profile.log"
+PROFILE_FROM_START=${AUTOKERNEL_NCU_PROFILE_FROM_START:-}
+
+if [ "$#" -eq 0 ]; then
+  set -- uv run python "$TARGET_ROOT/scripts/profile_candidate_once.py"
+  PROFILE_FROM_START=${PROFILE_FROM_START:-off}
+fi
 
 mkdir -p "$NCU_DIR"
 
@@ -57,11 +67,19 @@ echo "experiment_dir=$EXPERIMENT_DIR"
 echo "ncu_report=${REPORT_BASENAME}.ncu-rep"
 echo "ncu_log=$LOG_PATH"
 
+NCU_ARGS=(
+  --set full
+  --target-processes all
+  --kernel-name-base demangled
+  --force-overwrite
+  -o "$REPORT_BASENAME"
+)
+
+if [ -n "$PROFILE_FROM_START" ]; then
+  NCU_ARGS+=(--profile-from-start "$PROFILE_FROM_START")
+fi
+
 ncu \
-  --set full \
-  --target-processes all \
-  --kernel-name-base demangled \
-  --force-overwrite \
-  -o "$REPORT_BASENAME" \
+  "${NCU_ARGS[@]}" \
   "$@" \
   > "$LOG_PATH" 2>&1

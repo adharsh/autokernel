@@ -84,6 +84,7 @@ Validation requirements:
 - Put the trusted implementation in `reference.kernel_fn`.
 - Define exactly one stress/benchmark case in `validate.py`; this same case is
   used for calibrated reference timing and candidate timing.
+- Expose that timing case through `validate.make_stress_inputs()`.
 - Build separate correctness-only cases for representative shapes and edge
   cases.
 - Compare all returned outputs, including state tensors.
@@ -108,6 +109,13 @@ stress benchmark case and stores `results/reference_timing.json`.
 the calibrated `results/reference_timing.json` value for the printed
 `reference_us` metric. This keeps speedup reporting stable across agent
 experiments.
+
+Candidate validation and reference calibration both default to 20 warmup runs
+and 200 measured iterations. Override candidate timing with
+`AUTOKERNEL_CANDIDATE_WARMUP` and `AUTOKERNEL_CANDIDATE_ITERS`; override
+reference calibration with `AUTOKERNEL_REFERENCE_WARMUP` and
+`AUTOKERNEL_REFERENCE_ITERS` or with the calibration script's `--warmup` and
+`--iters` flags.
 
 ## 5. Check Profiling
 
@@ -202,6 +210,13 @@ This stores `profile.ncu-rep` and `profile.log` under
 `results/experiments/a{AGENT_ID}_{n}/ncu/`. The plain `validate.py` pass remains
 the source of timing and correctness metrics; the NCU pass is the evidence used
 for speed-of-light analysis and next design decisions.
+
+By default, `scripts/profile_ncu.sh` runs
+`uv run python scripts/profile_candidate_once.py` under Nsight Compute with
+profiling disabled at process start. That target calls
+`validate.make_stress_inputs()`, warms up the candidate, starts CUDA profiling,
+runs one candidate invocation, synchronizes, and stops profiling. Set
+`AUTOKERNEL_NCU_WARMUP` to override the warmup count for this profile-only pass.
 
 Before the first optimization pass for a task, agents should read NVIDIA's
 official Nsight Compute documentation and Kernel Profiling Guide and use them as
