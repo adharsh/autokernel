@@ -16,13 +16,23 @@ autokernel/
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
 ├── results/
 │   ├── experiments.tsv      # Shared, append-only experiment log (tab-separated)
-│   ├── notes/               # Shared detailed Markdown notes, one per experiment
-│   └── reference_timing.json # Calibrated reference timing for the stress case
+│   ├── reference_timing.json # Calibrated reference timing for the stress case
+│   └── experiments/         # One artifact folder per experiment
+│       └── a0_1/
+│           ├── note.md
+│           ├── run.log
+│           ├── ncu/
+│           │   ├── profile.ncu-rep
+│           │   └── profile.log
+│           ├── nsys/
+│           ├── microbench/
+│           └── codegen/
 ├── analysis.py              # Plotting + reports from results/experiments.tsv
 ├── profile_utils.py         # cuda_timer, cpu_timer, shared profiling utilities
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
     ├── calibrate_reference.py # One-time reference timing calibration
+    ├── profile_ncu.sh        # Required per-experiment Nsight Compute profiling
     ├── record_result.py      # File-locked experiment row appender
     └── setup.sh             # Local setup helper
 ```
@@ -36,7 +46,7 @@ autokernel/
 | `candidate/interface.py` | Agent | All optimization code lives here |
 | `candidate/__init__.py` | Agent | Exports from interface.py |
 | `results/experiments.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
-| `results/notes/*.md` | Agent (append-only) | Detailed notes when possible. Never delete or rewrite existing notes |
+| `results/experiments/*` | Agent/tool output | Per-experiment artifacts. Never delete or rewrite existing experiment folders |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |
 
@@ -79,21 +89,40 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 
 **Concurrency**: Multiple agents append to the same file. Use `scripts/record_result.py`, which calls `profile_utils.append_result()` and uses `fcntl.flock()` for atomic writes. Agents must not use `echo >>` for experiment rows.
 
-## 2.1 Experiment Notes
+## 2.1 Experiment Artifacts
 
-`results/experiments.tsv` is the compact index. Detailed shared memory lives in
-`results/notes/`, with deterministic filenames derived from experiment IDs:
+`results/experiments.tsv` is the compact index. Detailed shared memory lives
+under one folder per experiment, with deterministic folder names derived from
+experiment IDs:
 
-| Experiment | Note path |
-|------------|-----------|
-| `a0/1` | `results/notes/a0_1.md` |
-| `a7/23` | `results/notes/a7_23.md` |
+| Experiment | Artifact folder | Note path |
+|------------|-----------------|-----------|
+| `a0/1` | `results/experiments/a0_1/` | `results/experiments/a0_1/note.md` |
+| `a7/23` | `results/experiments/a7_23/` | `results/experiments/a7_23/note.md` |
+
+Canonical artifact folder:
+
+```text
+results/experiments/a{agent_id}_{n}/
+├── note.md
+├── run.log
+├── ncu/
+│   ├── profile.ncu-rep
+│   └── profile.log
+├── nsys/
+├── microbench/
+└── codegen/
+```
 
 Each note should include:
 
 - `## Hypothesis`
 - `## Change`
 - `## Result`
+- `## NCU Profile`
+- `## Speed-of-Light Gap`
+- `## Design Decision From Profile`
+- `## Codegen/PTX/SASS`
 - `## Lessons`
 - `## Followups`
 
@@ -101,6 +130,29 @@ TSV rows are the source of truth and must be recorded for every experiment.
 Notes are shared learning context and should be written when possible. This
 keeps the TSV compact while giving agents context to avoid repeating failed
 ideas and to build on successful ones.
+
+`## NCU Profile` is mandatory for any experiment that launches GPU kernels. It
+should name the `ncu/profile.ncu-rep` report in the experiment folder and
+summarize achieved SM throughput, achieved memory throughput, occupancy, memory
+traffic, instruction mix if relevant, dominant stall reasons, and notable
+launch/runtime facts. If the candidate crashed before kernel launch, the note
+must say NCU was not able to profile a kernel.
+
+`## Speed-of-Light Gap` must state how far the candidate is from speed of light,
+using Nsight Compute SOL/roofline percentages when available. It should identify
+the current limiting factor: compute, memory bandwidth, latency/occupancy,
+launch overhead, framework overhead, compiler/codegen, or another measured
+limit. `## Design Decision From Profile` must connect that evidence to the next
+experiment and backend choice.
+
+`## Codegen/PTX/SASS` must always state whether generated code was inspected.
+Inspection itself is profile-triggered, not mandatory for every experiment. It is
+expected when NCU indicates a codegen or instruction-level issue such as
+unexpected instruction mix, missing tensor cores, poor vectorization/coalescing,
+register pressure, spills/local memory, excessive predication, unrolling issues,
+or suspicious compiler behavior. Prefer SASS/cubin disassembly when available
+because it is closer to executed machine code than PTX. Save inspected artifacts
+under the experiment folder's `codegen/` subdirectory when practical.
 
 ---
 
@@ -194,12 +246,65 @@ The launcher detects GPUs with `nvidia-smi`, initializes `results/experiments.ts
 
 ---
 
+## 6.1 Profiling Ground Truth
+
+Profiling is the ground truth for optimization decisions. Every baseline and
+every experiment that launches GPU kernels must run an extensive Nsight Compute
+profile before its result is used to choose the next design:
+
+```bash
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+```
+
+The helper runs:
+
+```bash
+ncu --set full --target-processes all --kernel-name-base demangled ...
+```
+
+and stores:
+
+- `results/experiments/a{AGENT_ID}_{n}/ncu/profile.ncu-rep`
+- `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
+
+The raw `validate.py` pass remains the source of timing/correctness values for
+`results/experiments.tsv`; NCU is used to explain why the timing happened. Design
+decisions must cite the latest NCU evidence, especially speed-of-light metrics,
+SM and memory throughput, occupancy, memory traffic, instruction mix, dominant
+stall reasons, and launch/runtime behavior.
+
+Before the first optimization pass for a task, agents should read NVIDIA's
+official Nsight Compute documentation and Kernel Profiling Guide and use them as
+the metric interpretation reference:
+
+- https://docs.nvidia.com/nsight-compute/NsightCompute/index.html
+- https://docs.nvidia.com/nsight-compute/pdf/ProfilingGuide.pdf
+
+`nsys` and microbench profiling are optional follow-up tools. Use them when NCU
+shows a timeline/launch/synchronization question or when per-line attribution is
+needed. They complement the required NCU profile and do not replace it.
+
+Backend selection is downstream of profiling. Agents may use PyTorch, Triton,
+CUDA C++, CUTLASS, CUTE DSL, or PTX, but the chosen level must be justified by
+the measured limiter. If NCU shows compiler/codegen, instruction selection,
+occupancy, coalescing, scheduling, or other kernel-level limits that require
+lower-level control, agents should move lower in the stack.
+
+PTX/SASS inspection is part of that escalation path. It is not a replacement for
+NCU and should not be forced on every experiment; it is required when the NCU
+evidence makes codegen the active question.
+
+---
+
 ## 7. Microbench Agent
 
 ### Purpose
 A dedicated agent that writes and runs line-by-line microbenchmarks of the current candidate code, following the xllm benchmarking pattern. It answers: "what percentage of time is spent on each compute line?"
 
 This workflow is exposed as a Claude Code agent and as a Codex skill. It needs enough context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
+
+Microbench profiling is a follow-up tool for attribution. It never replaces the
+required Nsight Compute profile for an experiment.
 
 ### Workflow
 1. **Read the candidate code** — `candidate/interface.py`
@@ -218,7 +323,7 @@ This workflow is exposed as a Claude Code agent and as a Codex skill. It needs e
 - `cuda_timer` / `cpu_timer` (see below)
 - Read/Write/Bash for code generation and execution
 
-**Note**: `ncu` and `nsys` are available to the main optimization agent directly, not the microbench agent. The microbench agent only does microbenchmarking.
+**Note**: `ncu` and `nsys` are available to the main optimization agent directly, not the microbench agent. The microbench agent only does microbenchmarking, and its output is interpreted alongside the required NCU report.
 
 ### Output format
 ```
@@ -349,35 +454,37 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 
 ### Experiment loop (NEVER STOP — run indefinitely)
 ```
-1. Read shared experiments.tsv and recent/best notes
+1. Read shared experiments.tsv and recent/best experiment folders/notes
 2. Hypothesize one focused optimization change
 3. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
-6. Run: uv run python validate.py → extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
-7. Compute speedup = reference_us / candidate_us and decide status
-8. Write results/notes/a{id}_{n}.md
+6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
+7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}"
+8. Compute speedup = reference_us / candidate_us and decide status
 9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
-10. If correctness == PASS and speedup > previous best:
+10. Write results/experiments/a{id}_{n}/note.md with NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
+11. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)
    Else (fail, crash, or correct but slower):
      status = "discard" or "crash"
      git checkout {current_base}            # go back to last keep
-11. Repeat from step 1
+12. Repeat from step 1
 ```
 
 Every experiment's branch is preserved regardless of outcome. To inspect any experiment later: `git checkout a{id}/{n}` or `git show a{id}/{n}:candidate/interface.py`.
 
 ### Tools available
-You have access to: `ncu`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. Use these whenever you need to understand where or why time is being spent.
+You have access to: `ncu`, `scripts/profile_ncu.sh`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. `scripts/profile_ncu.sh` is required for every baseline and experiment that launches kernels. Use `nsys` and microbench profiling for specific follow-up questions raised by NCU.
 
 ### Optimization strategy
-Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is most appropriate for the hypothesis. Keep changes focused — one hypothesis per experiment.
+Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is most appropriate for the measured limiter. Keep changes focused — one hypothesis per experiment. Backend changes must cite the latest NCU speed-of-light gap and limiting factor.
 
 ### Constraints
 - Never modify `validate.py` or `reference.py`
 - Never skip correctness checks
+- Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment
 - VRAM must not exceed 80% of GPU capacity
 - Simpler code wins when performance is equal
@@ -433,6 +540,8 @@ Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is mos
   Kept:                  8 (17%)
   Discarded:             35
   Crashed:               4 (9%)
+  NCU artifacts:         47/47
+  Profile note sections: 47/47
 
   Top 5 improvements:
     1. 42.30 us (2.01x) — fuse norm+proj + vectorized loads
@@ -481,6 +590,13 @@ Based on experiment history, generate actionable suggestions:
 - Strong speedup (>1.5x): suggest fine-grained autotuning, profiling remaining bottlenecks
 - High VRAM (>80%): suggest memory-efficient techniques
 
+### Profiling coverage audit
+`analysis.py` also checks that each experiment has an NCU report/log under its
+`results/experiments/<experiment>/ncu/` folder and that its `note.md` includes
+`## NCU Profile`, `## Speed-of-Light Gap`,
+`## Design Decision From Profile`, and `## Codegen/PTX/SASS`. Missing artifacts
+or sections are listed in `results/report.md`.
+
 ---
 
 ## 10. File Locking for Shared results/experiments.tsv
@@ -524,8 +640,8 @@ def read_results(csv_path: str) -> list[dict]:
 
 ### First-time setup (human runs once)
 ```bash
-# Initialize results/experiments.tsv with header and create note directory
-mkdir -p results/notes
+# Initialize results/experiments.tsv with header and create artifact root
+mkdir -p results/experiments
 printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work
@@ -541,13 +657,15 @@ git commit -m "task setup"
 ```bash
 # Agent receives:
 # AGENT_ID, CUDA_VISIBLE_DEVICES, WORKTREE_PATH,
-# AUTOKERNEL_EXPERIMENTS_TSV, AUTOKERNEL_REFERENCE_TIMING_PATH
+# AUTOKERNEL_EXPERIMENTS_TSV, AUTOKERNEL_EXPERIMENTS_DIR,
+# AUTOKERNEL_REFERENCE_TIMING_PATH
 # Agent does:
 cd $WORKTREE_PATH
 # Baseline branch a{AGENT_ID}/0 was created by the launcher.
 
 # Run baseline. reference_us is the calibrated constant for the stress case.
 uv run python validate.py → extract reference_us, candidate_us
+scripts/profile_ncu.sh "a${AGENT_ID}/0" → write required baseline NCU report
 
 # Record baseline
 append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="baseline")
@@ -583,9 +701,10 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="basel
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
 | 2 | `profile_utils.py` | `profile_utils.py` | `cuda_timer`, `cpu_timer`, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Sub-op bottleneck analysis |
-| 5 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
-| 6 | Results TSV init | Part of setup | Header row creation + baseline recording |
+| 4 | Required NCU profile helper | `scripts/profile_ncu.sh` | Standard extensive Nsight Compute profile for every baseline and experiment |
+| 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
+| 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
+| 7 | Results TSV init | Part of setup | Header row creation + baseline recording |
 
 ### What NOT to implement (already exists / human-provided)
 - `validate.py` — provided by human

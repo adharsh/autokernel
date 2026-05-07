@@ -23,6 +23,13 @@ RESULTS_DIR = SCRIPT_DIR / "results"
 PROGRESS_HTML = RESULTS_DIR / "progress.html"
 SPEEDUP_HTML = RESULTS_DIR / "speedup.html"
 REPORT_MD = RESULTS_DIR / "report.md"
+EXPERIMENTS_DIR = RESULTS_DIR / "experiments"
+REQUIRED_NOTE_SECTIONS = (
+    "## NCU Profile",
+    "## Speed-of-Light Gap",
+    "## Design Decision From Profile",
+    "## Codegen/PTX/SASS",
+)
 
 AGENT_SYMBOLS = ["circle", "square", "diamond", "triangle-up", "triangle-down",
                  "cross", "x", "star"]
@@ -106,6 +113,45 @@ def _ref_and_best(df, cats):
         if len(v) > 0:
             best_speedup = float(v.max())
     return ref_us, best_us, best_speedup
+
+
+def _safe_experiment_id(experiment_id) -> str:
+    return str(experiment_id).replace("/", "_")
+
+
+def profiling_coverage(df: pd.DataFrame) -> dict:
+    """Check whether experiments have required NCU artifacts and note sections."""
+    missing_ncu: list[str] = []
+    missing_note_sections: list[str] = []
+    total = len(df)
+
+    for _, row in df.iterrows():
+        eid = row.get("experiment_id", "")
+        if pd.isna(eid) or str(eid).strip() == "":
+            continue
+        safe_id = _safe_experiment_id(eid)
+        experiment_dir = EXPERIMENTS_DIR / safe_id
+        ncu_report = experiment_dir / "ncu" / "profile.ncu-rep"
+        ncu_log = experiment_dir / "ncu" / "profile.log"
+        if not ncu_report.exists() and not ncu_log.exists():
+            missing_ncu.append(str(eid))
+
+        note_path = experiment_dir / "note.md"
+        if not note_path.exists():
+            missing_note_sections.append(f"{eid}: missing note")
+            continue
+        note = note_path.read_text(encoding="utf-8", errors="replace")
+        missing = [section for section in REQUIRED_NOTE_SECTIONS if section not in note]
+        if missing:
+            missing_note_sections.append(f"{eid}: missing {', '.join(missing)}")
+
+    return {
+        "total": total,
+        "with_ncu": total - len(missing_ncu),
+        "missing_ncu": missing_ncu,
+        "with_profile_notes": total - len(missing_note_sections),
+        "missing_note_sections": missing_note_sections,
+    }
 
 
 def _hover_text(row) -> str:
@@ -334,6 +380,9 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
     print(f"  Kept:                  {n_keep} ({kp:.0f}%)")
     print(f"  Discarded:             {n_discard}")
     print(f"  Crashed:               {n_crash} ({cp:.0f}%)")
+    coverage = profiling_coverage(df)
+    print(f"  NCU artifacts:         {coverage['with_ncu']}/{coverage['total']}")
+    print(f"  Profile note sections: {coverage['with_profile_notes']}/{coverage['total']}")
 
     # Top 5
     kept_df = df[cats == "keep"]
@@ -429,6 +478,31 @@ def generate_report(df: pd.DataFrame) -> None:
     if best_speedup:
         L.append(f"| Best speedup | {best_speedup:.2f}x |")
     L.append("")
+
+    coverage = profiling_coverage(df)
+    L += [
+        "## Profiling Coverage",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| NCU artifacts present | {coverage['with_ncu']}/{coverage['total']} |",
+        f"| Notes with required profile sections | {coverage['with_profile_notes']}/{coverage['total']} |",
+        "",
+    ]
+    if coverage["missing_ncu"]:
+        L.append("Missing NCU artifacts:")
+        for eid in coverage["missing_ncu"][:20]:
+            L.append(f"- {eid}")
+        if len(coverage["missing_ncu"]) > 20:
+            L.append(f"- ... {len(coverage['missing_ncu']) - 20} more")
+        L.append("")
+    if coverage["missing_note_sections"]:
+        L.append("Missing note profile sections:")
+        for item in coverage["missing_note_sections"][:20]:
+            L.append(f"- {item}")
+        if len(coverage["missing_note_sections"]) > 20:
+            L.append(f"- ... {len(coverage['missing_note_sections']) - 20} more")
+        L.append("")
 
     kept_df = df[cats == "keep"]
     if len(kept_df) and "candidate_us" in kept_df.columns:

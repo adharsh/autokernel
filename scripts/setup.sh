@@ -7,7 +7,7 @@ set -euo pipefail
 # - optional uv sync
 # - Claude/Codex microbench discovery links
 # - root validate.py/reference.py from templates when missing
-# - results/experiments.tsv and results/notes initialization
+# - results/experiments.tsv and results/experiments/ initialization
 # - calibrated reference timing reminder
 # - optional lightweight environment checks
 #
@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TEMPLATE_DIR="$ROOT/docs/templates"
 RESULTS_DIR="$ROOT/results"
-NOTES_DIR="$RESULTS_DIR/notes"
+EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 TSV="$RESULTS_DIR/experiments.tsv"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
 CODEX_HOME=${CODEX_HOME:-"$HOME/.codex"}
@@ -135,15 +135,15 @@ init_results_tsv() {
 
   echo "init: $TSV"
   if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$RESULTS_DIR" "$NOTES_DIR"
+    mkdir -p "$RESULTS_DIR" "$EXPERIMENTS_DIR"
     printf "%s\n" "$TSV_HEADER" > "$TSV"
   fi
 }
 
-init_notes_dir() {
-  echo "ok: $NOTES_DIR"
+init_experiments_dir() {
+  echo "ok: $EXPERIMENTS_DIR"
   if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$NOTES_DIR"
+    mkdir -p "$EXPERIMENTS_DIR"
   fi
 }
 
@@ -200,8 +200,10 @@ Next steps:
    uv run python validate.py
 4. Revert candidate/interface.py to the optimization entry point.
 5. Commit validate.py, reference.py, and any task setup so worktrees can see them.
-6. Restart Codex/Claude so microbench is discovered.
-7. Launch agents:
+6. Confirm Nsight Compute profiling works:
+   scripts/profile_ncu.sh smoke-test
+7. Restart Codex/Claude so microbench is discovered.
+8. Launch agents:
    ./scripts/agents.sh start
 EOF
 }
@@ -214,7 +216,7 @@ setup_microbench_links
 copy_template validate.py
 copy_template reference.py
 init_results_tsv
-init_notes_dir
+init_experiments_dir
 
 if [ "$DO_VERIFY" -eq 1 ]; then
   run_checks

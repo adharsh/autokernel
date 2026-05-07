@@ -8,8 +8,9 @@ The main workflow is:
 2. Fill in the task-specific reference and validation files.
 3. Smoke test the task.
 4. Calibrate the reference timing.
-5. Commit the task setup so worktrees can see it.
-6. Launch one optimization agent per GPU.
+5. Confirm `ncu` profiling permissions.
+6. Commit the task setup so worktrees can see it.
+7. Launch one optimization agent per GPU.
 
 ## Prerequisites
 
@@ -91,6 +92,44 @@ Git worktrees only contain tracked files, so untracked `validate.py` or `referen
 
 Restart Claude Code and/or Codex after setup so the microbench agent/skill is discovered.
 
+## Profiling Policy
+
+Profiling is mandatory. Every baseline and every experiment that launches GPU
+kernels must run the standard extensive Nsight Compute pass:
+
+```bash
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+```
+
+This stores `profile.ncu-rep` and `profile.log` under
+`results/experiments/a{AGENT_ID}_{n}/ncu/`. The plain `validate.py` pass remains
+the source of timing and correctness metrics; the NCU pass is the evidence used
+for speed-of-light analysis and next design decisions.
+
+Before the first optimization pass for a task, agents should read NVIDIA's
+official Nsight Compute documentation and Kernel Profiling Guide and use them as
+the metric interpretation reference:
+
+- https://docs.nvidia.com/nsight-compute/NsightCompute/index.html
+- https://docs.nvidia.com/nsight-compute/pdf/ProfilingGuide.pdf
+
+Experiment notes must summarize the NCU findings, how far the candidate is from
+speed of light, the current limiting factor, and what the profile says to try
+next. `nsys` and the microbench workflow are optional follow-up tools for
+timeline, launch overhead, synchronization, or per-line attribution questions;
+they do not replace the required NCU profile.
+
+Backend choices are explicitly profile-driven. PyTorch, Triton, CUDA C++,
+CUTLASS, CUTE DSL, and PTX are all allowed, but moving lower level should be
+justified by Nsight Compute evidence such as codegen, occupancy, memory
+coalescing, instruction mix, scheduling, or other kernel-level limits.
+
+PTX/SASS inspection is optional by default and required when NCU points at a
+codegen or instruction-level limiter. Prefer SASS/cubin disassembly when
+available because it is closer to executed machine code than PTX. When inspected,
+save artifacts under `results/experiments/<experiment>/codegen/` and record the
+finding in the experiment note.
+
 ## Launch Agents
 
 Codex is the default backend. It launches with `gpt-5.5` at `xhigh` effort:
@@ -125,10 +164,12 @@ the shared root `results/experiments.tsv`. Worktree `results/` paths are
 symlinked to the root results directory when agents launch.
 
 `results/experiments.tsv` is the compact machine-readable index. Detailed
-experiment memory lives in `results/notes/`, with one Markdown note per
-experiment, for example `results/notes/a0_1.md` for `a0/1`. The TSV row is the
-source of truth and should be written for every experiment; notes are shared
-learning context and should be written when possible.
+experiment memory lives under one folder per experiment, for example
+`results/experiments/a0_1/` for `a0/1`. The TSV row is the source of truth and
+should be written for every experiment; `note.md`, `run.log`, NCU reports, and
+optional artifacts live under the per-experiment folder. `analysis.py` audits
+this coverage and flags notes that are missing the required NCU, speed-of-light,
+design-decision, or codegen/PTX/SASS sections.
 
 ## Profiling Permissions
 
@@ -145,6 +186,12 @@ Reboot, then check:
 
 ```bash
 cat /proc/driver/nvidia/params | grep RmProfilingAdminOnly
+```
+
+Then run a smoke profile from the repo root:
+
+```bash
+scripts/profile_ncu.sh smoke-test
 ```
 
 ## Agent Playbook

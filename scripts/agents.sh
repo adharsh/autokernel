@@ -14,7 +14,7 @@ ROOT=$(pwd)
 RESULTS_DIR="$ROOT/results"
 LOGS_DIR="$RESULTS_DIR/logs"
 TSV="$RESULTS_DIR/experiments.tsv"
-NOTES_DIR="$RESULTS_DIR/notes"
+EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 REFERENCE_TIMING_PATH="$RESULTS_DIR/reference_timing.json"
 PID_FILE="$ROOT/.agent_pids"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
@@ -218,7 +218,7 @@ _launch_agent() {
         AUTOKERNEL_ROOT=$ROOT \
         AUTOKERNEL_RESULTS_DIR=$RESULTS_DIR \
         AUTOKERNEL_EXPERIMENTS_TSV=$TSV \
-        AUTOKERNEL_NOTES_DIR=$NOTES_DIR \
+        AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR \
         AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
         CUDA_VISIBLE_DEVICES=$gpu_id \
         "$CLAUDE_BIN" -p \
@@ -244,7 +244,7 @@ _launch_agent() {
         AUTOKERNEL_ROOT=$ROOT \
         AUTOKERNEL_RESULTS_DIR=$RESULTS_DIR \
         AUTOKERNEL_EXPERIMENTS_TSV=$TSV \
-        AUTOKERNEL_NOTES_DIR=$NOTES_DIR \
+        AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR \
         AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
         CUDA_VISIBLE_DEVICES=$gpu_id \
         "$CODEX_BIN" "${codex_cmd[@]}" \
@@ -330,7 +330,7 @@ cmd_start() {
   echo "Agent prefix offset: $PREFIX_OFFSET (agents will be a${PREFIX_OFFSET}..a$((PREFIX_OFFSET + NUM_GPUS - 1)))"
 
   _init_results_tsv
-  mkdir -p "$LOGS_DIR" "$NOTES_DIR"
+  mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
   : > "$PID_FILE"
 
   for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
@@ -352,7 +352,7 @@ cmd_start() {
     : > "$LOG"
 
     _launch_agent start "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_NOTES_DIR=$NOTES_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything."
+      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. Start the experiment loop now. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
@@ -379,7 +379,7 @@ cmd_resume() {
   _check_reference_calibration
 
   _init_results_tsv
-  mkdir -p "$LOGS_DIR" "$NOTES_DIR"
+  mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
   : > "$PID_FILE"
 
   for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
@@ -405,7 +405,7 @@ cmd_resume() {
     echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
     _launch_agent resume "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything."
+      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Required: run scripts/profile_ncu.sh for every resumed experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
