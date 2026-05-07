@@ -7,6 +7,7 @@ set -euo pipefail
 #   ./scripts/agents.sh stop     # kill all running agents
 #   ./scripts/agents.sh resume   # resume interrupted agents
 #   ./scripts/agents.sh status   # show which agents are alive
+#   AGENT_CLI=claude ./scripts/agents.sh start
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -14,9 +15,31 @@ RESULTS_DIR="$ROOT/results"
 LOGS_DIR="$RESULTS_DIR/logs"
 TSV="$RESULTS_DIR/experiments.tsv"
 PID_FILE="$ROOT/.agent_pids"
+TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
+
+# Agent backend. AGENT_CLI accepts: claude, codex.
+# "code" is accepted as a codex alias to avoid accidentally invoking VS Code.
+AGENT_CLI=${AGENT_CLI:-codex}
+
+# Claude settings
+CLAUDE_BIN=${CLAUDE_BIN:-claude}
+CLAUDE_MODEL=claude-opus-4-7
+CLAUDE_EFFORT=high
+CLAUDE_ALLOWED_TOOLS=(Edit Write Read Bash Glob Grep Agent)
+
+# Codex settings
+CODEX_BIN=${CODEX_BIN:-codex}
+CODEX_MODEL=gpt-5.5
+CODEX_EFFORT=xhigh
+CODEX_COMMON_ARGS=(
+  --json
+  --dangerously-bypass-approvals-and-sandbox
+  --model "$CODEX_MODEL"
+  -c "model_reasoning_effort=\"$CODEX_EFFORT\""
+)
 
 # ---------------------------------------------------------------------------
-# Subcommands
+# Helpers
 # ---------------------------------------------------------------------------
 
 # Parse a line from PID_FILE. Format: "AGENT_ID:PID".
@@ -26,6 +49,155 @@ _parse_pid_line() {
   _agent_id="${line%%:*}"
   _pid="${line#*:}"
 }
+
+_normalize_agent_cli() {
+  case "${AGENT_CLI,,}" in
+    claude)
+      AGENT_CLI=claude
+      ;;
+    codex|code)
+      AGENT_CLI=codex
+      ;;
+    *)
+      echo "Unsupported AGENT_CLI=$AGENT_CLI. Expected 'claude' or 'codex'." >&2
+      exit 1
+      ;;
+  esac
+}
+
+_agent_command() {
+  case "$AGENT_CLI" in
+    claude) printf "%s\n" "$CLAUDE_BIN" ;;
+    codex)  printf "%s\n" "$CODEX_BIN" ;;
+  esac
+}
+
+_agent_model_summary() {
+  case "$AGENT_CLI" in
+    claude) printf "model=%s effort=%s\n" "$CLAUDE_MODEL" "$CLAUDE_EFFORT" ;;
+    codex)  printf "model=%s effort=%s\n" "$CODEX_MODEL" "$CODEX_EFFORT" ;;
+  esac
+}
+
+_require_agent_cli() {
+  _normalize_agent_cli
+  local bin
+  bin=$(_agent_command)
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    echo "AGENT_CLI=$AGENT_CLI requires '$bin' on PATH." >&2
+    exit 1
+  fi
+}
+
+_detect_num_gpus() {
+  local num_gpus
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "nvidia-smi is not on PATH; cannot auto-detect GPUs." >&2
+    echo "Run agents on a GPU host with NVIDIA tools available." >&2
+    exit 1
+  fi
+  if ! num_gpus=$(nvidia-smi --query-gpu=index --format=csv,noheader | awk 'NF { count++ } END { print count + 0 }'); then
+    echo "Failed to query GPUs with nvidia-smi." >&2
+    exit 1
+  fi
+  if [ "$num_gpus" -le 0 ]; then
+    echo "No GPUs detected by nvidia-smi." >&2
+    exit 1
+  fi
+  printf "%s\n" "$num_gpus"
+}
+
+_init_results_tsv() {
+  mkdir -p "$RESULTS_DIR"
+  if [ ! -s "$TSV" ]; then
+    printf "%s\n" "$TSV_HEADER" > "$TSV"
+  fi
+}
+
+_check_task_files() {
+  local num_gpus="$1"
+  local file
+  local untracked=()
+
+  for file in validate.py reference.py; do
+    if [ ! -f "$ROOT/$file" ]; then
+      echo "Missing $file. Run ./scripts/setup.sh, then fill in the task-specific implementation before launching agents." >&2
+      exit 1
+    fi
+    if ! git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+      untracked+=("$file")
+    fi
+  done
+
+  if [ "${#untracked[@]}" -eq 0 ]; then
+    return
+  fi
+
+  if [ "$num_gpus" -gt 1 ]; then
+    echo "Untracked task files: ${untracked[*]}" >&2
+    echo "Commit them before launching multiple agents so new worktrees contain the validation harness." >&2
+    exit 1
+  fi
+
+  echo "warning: untracked task files: ${untracked[*]}" >&2
+  echo "warning: commit them before multi-agent runs so worktrees contain the validation harness." >&2
+}
+
+# Sets: _agent_pid
+_launch_agent() {
+  local mode="$1"
+  local gpu_id="$2"
+  local agent_id="$3"
+  local worktree="$4"
+  local log="$5"
+  local prompt="$6"
+  local old_pwd="$PWD"
+  local claude_resume_args=()
+  local codex_cmd=(exec)
+
+  case "$AGENT_CLI" in
+    claude)
+      if [ "$mode" = "resume" ]; then
+        claude_resume_args=(--continue)
+      fi
+
+      AGENT_ID=$agent_id \
+        WORKTREE_PATH=$worktree \
+        CUDA_VISIBLE_DEVICES=$gpu_id \
+        "$CLAUDE_BIN" -p \
+          "${claude_resume_args[@]}" \
+          --model "$CLAUDE_MODEL" \
+          --effort "$CLAUDE_EFFORT" \
+          --output-format stream-json \
+          --verbose \
+          --allowedTools "${CLAUDE_ALLOWED_TOOLS[@]}" \
+          --permission-mode bypassPermissions \
+          "$prompt" \
+          >> "$log" 2>&1 &
+      _agent_pid=$!
+      ;;
+    codex)
+      if [ "$mode" = "resume" ]; then
+        codex_cmd=(exec resume --last)
+      fi
+
+      cd "$worktree"
+      AGENT_ID=$agent_id \
+        WORKTREE_PATH=$worktree \
+        CUDA_VISIBLE_DEVICES=$gpu_id \
+        "$CODEX_BIN" "${codex_cmd[@]}" \
+          "${CODEX_COMMON_ARGS[@]}" \
+          - \
+          >> "$log" 2>&1 <<< "$prompt" &
+      _agent_pid=$!
+      cd "$old_pwd"
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
 
 cmd_stop() {
   if [ ! -f "$PID_FILE" ]; then
@@ -73,18 +245,17 @@ cmd_status() {
 }
 
 cmd_start() {
-  # Kill existing agents first
+  _require_agent_cli
+
   if [ -f "$PID_FILE" ]; then
-    echo "Killing existing agents..."
-    while read -r line; do
-      _parse_pid_line "$line"
-      kill "$_pid" 2>/dev/null || true
-    done < "$PID_FILE"
-    sleep 1
+    cmd_stop
   fi
 
-  NUM_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+  NUM_GPUS=$(_detect_num_gpus)
   echo "Detected $NUM_GPUS GPU(s)"
+  echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
+  echo "Agent settings: $(_agent_model_summary)"
+  _check_task_files "$NUM_GPUS"
 
   # Find next free agent prefix by checking existing a{N}/{M} branches
   MAX_PREFIX=$(git branch --list 'a*/*' | grep -oP '(?<=\ba)\d+(?=/)' | sort -n | tail -1 || true)
@@ -95,32 +266,32 @@ cmd_start() {
   fi
   echo "Agent prefix offset: $PREFIX_OFFSET (agents will be a${PREFIX_OFFSET}..a$((PREFIX_OFFSET + NUM_GPUS - 1)))"
 
+  _init_results_tsv
   mkdir -p "$LOGS_DIR"
   : > "$PID_FILE"
 
   for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
     AGENT_ID=$((GPU_ID + PREFIX_OFFSET))
+    BASELINE_BRANCH="a${AGENT_ID}/0"
+    git branch "$BASELINE_BRANCH" HEAD 2>/dev/null || true
+
     WORKTREE="$ROOT"
     if [ "$GPU_ID" -gt 0 ]; then
       WORKTREE="$ROOT/worktree-a${AGENT_ID}"
       if [ ! -d "$WORKTREE" ]; then
-        git worktree add "$WORKTREE" master
+        git worktree add "$WORKTREE" "$BASELINE_BRANCH"
       fi
     fi
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
     echo "Launching agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
+    : > "$LOG"
 
-    CUDA_VISIBLE_DEVICES=$GPU_ID claude -p \
-      --output-format stream-json \
-      --verbose \
-      --allowedTools "Edit" "Write" "Read" "Bash" "Glob" "Grep" "Agent" \
-      --permission-mode bypassPermissions \
-      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything." \
-      > "$LOG" 2>&1 &
+    _launch_agent start "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
+      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything."
 
-    echo "$AGENT_ID:$!" >> "$PID_FILE"
-    echo "  PID $!"
+    echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
+    echo "  PID $_agent_pid"
   done
 
   echo ""
@@ -134,10 +305,15 @@ cmd_start() {
 }
 
 cmd_resume() {
-  NUM_GPUS=$(nvidia-smi --query-gpu=index --format=csv,noheader | wc -l)
+  _require_agent_cli
+
+  NUM_GPUS=$(_detect_num_gpus)
   echo "Detected $NUM_GPUS GPU(s)"
+  echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
+  echo "Agent settings: $(_agent_model_summary)"
   echo "Resuming agents from previous sessions..."
 
+  _init_results_tsv
   mkdir -p "$LOGS_DIR"
   : > "$PID_FILE"
 
@@ -162,17 +338,11 @@ cmd_resume() {
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
     echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
-    CUDA_VISIBLE_DEVICES=$GPU_ID claude -p \
-      --continue \
-      --output-format stream-json \
-      --verbose \
-      --allowedTools "Edit" "Write" "Read" "Bash" "Glob" "Grep" "Agent" \
-      --permission-mode bypassPermissions \
-      "You were interrupted. Read results/experiments.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything." \
-      >> "$LOG" 2>&1 &
+    _launch_agent resume "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
+      "You were interrupted. Read results/experiments.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything."
 
-    echo "$AGENT_ID:$!" >> "$PID_FILE"
-    echo "  PID $!"
+    echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
+    echo "  PID $_agent_pid"
   done
 
   echo ""

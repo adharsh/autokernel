@@ -33,6 +33,7 @@ Examples: `a0/0` (baseline), `a0/1` (first experiment), `a1/3` (agent 1, fourth 
 
 ```bash
 cd $WORKTREE_PATH
+git branch a${AGENT_ID}/0 HEAD 2>/dev/null || true
 mkdir -p results
 uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
@@ -104,7 +105,7 @@ Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse -
 
 Increment `n`. Go to step 1.
 
-If you run out of ideas: use `ncu` or the microbench agent to find bottlenecks, try combining previous near-misses, or try a radically different backend. If you feel stuck, think harder -- re-read the kernel code, try a fundamentally different algorithm, or switch backends entirely.
+If you run out of ideas: use `ncu` or the microbench agent/skill to find bottlenecks, try combining previous near-misses, or try a radically different backend. If you feel stuck, think harder -- re-read the kernel code, try a fundamentally different algorithm, or switch backends entirely.
 
 ## Simplicity criterion
 
@@ -117,8 +118,8 @@ All else being equal, simpler is better. A small speedup that adds ugly complexi
 | Tool | Use |
 |------|-----|
 | `ncu` | NVIDIA Nsight Compute -- kernel-level profiling |
-| `nsight-systems` | System-wide timeline profiling |
-| microbench agent | Spawns sub-agent returning per-line sub-op breakdown table (see `agents/microbench.md`) |
+| `nsys` | NVIDIA Nsight Systems timeline profiling |
+| microbench agent/skill | Returns per-line sub-op breakdown table (see `agents/microbench.md`) |
 
 ### Constraints
 

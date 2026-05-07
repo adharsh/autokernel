@@ -1,7 +1,7 @@
 """
 AutoKernel -- Analysis & visualization of experiment results.
 
-Reads experiments.tsv (multi-agent kernel optimization log), produces:
+Reads results/experiments.tsv (multi-agent kernel optimization log), produces:
   - progress.html  : interactive scatter of candidate latency over experiments
   - speedup.html   : interactive scatter of speedup over experiments
   - report.md      : markdown session report

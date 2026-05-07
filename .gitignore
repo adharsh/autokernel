@@ -45,6 +45,7 @@ Thumbs.db
 
 # AI tooling
 .claude/
+.codex/
 .claude-flow/
 .swarm/
 .mcp.json

@@ -3,7 +3,7 @@ Profiling and results utilities for the AutoKernel agent system.
 
 Provides:
 - cuda_timer / cpu_timer: Microbenchmark timing functions
-- TSV file locking utilities for shared results.tsv
+- TSV file locking utilities for shared results/experiments.tsv
 - Lineage tree construction from experiment history
 """
 
@@ -123,17 +123,17 @@ def cpu_timer(
 
 
 def init_results_tsv(tsv_path: str) -> None:
-    """Create results.tsv with a header row if it doesn't exist or is empty.
+    """Create the results TSV with a header row if it doesn't exist or is empty.
 
     Uses exclusive locking to prevent races between concurrent agents.
     """
     header_line = "\t".join(TSV_COLUMNS) + "\n"
+    parent = os.path.dirname(tsv_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
     # Open in r+ if file exists so we can check its size, otherwise create.
-    try:
-        fd = os.open(tsv_path, os.O_RDWR | os.O_CREAT, 0o644)
-    except OSError:
-        return
+    fd = os.open(tsv_path, os.O_RDWR | os.O_CREAT, 0o644)
 
     with os.fdopen(fd, "r+") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
@@ -153,13 +153,17 @@ def append_result(
     row: dict,
     columns: list[str] | None = None,
 ) -> None:
-    """Atomically append a row to the shared results.tsv.
+    """Atomically append a row to the shared results TSV.
 
     Uses fcntl.flock with LOCK_EX for exclusive access so multiple
     agents can safely write concurrently.
     """
     if columns is None:
         columns = TSV_COLUMNS
+
+    parent = os.path.dirname(tsv_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 
     line = "\t".join(str(row.get(col, "")) for col in columns) + "\n"
 
@@ -174,7 +178,7 @@ def append_result(
 
 
 def read_results(tsv_path: str) -> list[dict]:
-    """Read results.tsv with a shared lock (allows concurrent reads).
+    """Read a results TSV with a shared lock (allows concurrent reads).
 
     Returns a list of dicts, one per row, keyed by column name.
     """

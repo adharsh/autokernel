@@ -14,11 +14,13 @@ autokernel/
 │   ├── __init__.py
 │   └── interface.py         # Agent edits THIS — all optimization code, bindings, utilities
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
-├── results.tsv              # Shared, append-only experiment log (tab-separated)
-├── analysis.py              # Plotting + reports from results.tsv
+├── results/
+│   └── experiments.tsv      # Shared, append-only experiment log (tab-separated)
+├── analysis.py              # Plotting + reports from results/experiments.tsv
 ├── profile_utils.py         # cuda_timer, cpu_timer, shared profiling utilities
 └── scripts/
-    └── launch_agents.sh     # Multi-agent launcher (one per GPU)
+    ├── agents.sh            # Multi-agent launcher (one per GPU)
+    └── setup.sh             # Local setup helper
 ```
 
 ### File Mutability Rules
@@ -29,7 +31,7 @@ autokernel/
 | `reference.py` | Nobody | Ground truth, never modified |
 | `candidate/interface.py` | Agent | All optimization code lives here |
 | `candidate/__init__.py` | Agent | Exports from interface.py |
-| `results.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
+| `results/experiments.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |
 
@@ -75,7 +77,7 @@ Format: `a{agent_id}/{experiment_number}`
 - `a1/3` — agent 1, fourth experiment
 
 This string is used as:
-1. The `experiment_id` column in results.tsv
+1. The `experiment_id` column in results/experiments.tsv
 2. The git branch name (via `git branch a0/1 <commit-hash>`)
 3. The lookup key for cross-agent reference
 
@@ -119,7 +121,7 @@ Every experiment gets its own branch. No resets, no master branch. `current_base
 2. Agent edits candidate/interface.py
 3. git add candidate/ && git commit -m "a0/1: fuse norm+proj"
 4. Run validate.py → get results
-5. Append row to results.tsv
+5. Append row to results/experiments.tsv
 6. If keep:   current_base = a0/1           # advance
 7. If discard/crash: git checkout {current_base}  # go back to last keep. That's it.
 ```
@@ -135,33 +137,23 @@ PRs add overhead that slows rapid iteration. Create summary PRs post-hoc if need
 
 ### Architecture
 ```
-results.tsv        (shared, append-only, file-locked)
-├── worktree-a0/   (git worktree on GPU 0, branch a0/master)
-├── worktree-a1/   (git worktree on GPU 1, branch a1/master)
-└── worktree-a2/   (git worktree on GPU 2, branch a2/master)
+results/experiments.tsv        (shared, append-only, file-locked)
+├── ./             (GPU 0, main repo; baseline branch a0/0 exists)
+├── worktree-a1/   (GPU 1, branch a1/0)
+└── worktree-a2/   (GPU 2, branch a2/0)
 ```
 
-### Launch script (`scripts/launch_agents.sh`)
-Each agent is a Claude Code instance running in a separate worktree with a pinned GPU:
+### Launch script (`scripts/agents.sh`)
+Each agent is a Codex or Claude process running with a pinned GPU:
 ```bash
-#!/bin/bash
-# Launch N agents, one per GPU
-NUM_GPUS=$(nvidia-smi -L | wc -l)
+./scripts/setup.sh
+./scripts/agents.sh start
 
-for i in $(seq 0 $((NUM_GPUS - 1))); do
-    BRANCH="a${i}/0"
-    WORKTREE="worktree-a${i}"
-
-    # Create baseline branch and worktree
-    git branch "$BRANCH" HEAD 2>/dev/null || true
-    git worktree add "$WORKTREE" "$BRANCH" 2>/dev/null || true
-
-    # Launch agent with pinned GPU
-    CUDA_VISIBLE_DEVICES=$i claude --agent-id $i --worktree "$WORKTREE" &
-done
-
-wait
+# Optional Claude backend
+AGENT_CLI=claude ./scripts/agents.sh start
 ```
+
+The launcher detects GPUs with `nvidia-smi`, initializes `results/experiments.tsv`, creates `a{id}/0` baseline branches, adds worktrees for agents 1+, and writes logs under `results/logs/`.
 
 ---
 
@@ -170,7 +162,7 @@ wait
 ### Purpose
 A dedicated agent that writes and runs line-by-line microbenchmarks of the current candidate code, following the xllm benchmarking pattern. It answers: "what percentage of time is spent on each compute line?"
 
-This is a Claude Code agent (not a skill) because it needs its own context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
+This workflow is exposed as a Claude Code agent and as a Codex skill. It needs enough context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
 
 ### Workflow
 1. **Read the candidate code** — `candidate/interface.py`
@@ -189,7 +181,7 @@ This is a Claude Code agent (not a skill) because it needs its own context to re
 - `cuda_timer` / `cpu_timer` (see below)
 - Read/Write/Bash for code generation and execution
 
-**Note**: `ncu` and `nsight-systems` are available to the main optimization agent directly, not the microbench agent. The microbench agent only does microbenchmarking.
+**Note**: `ncu` and `nsys` are available to the main optimization agent directly, not the microbench agent. The microbench agent only does microbenchmarking.
 
 ### Output format
 ```
@@ -216,7 +208,7 @@ The microbench agent follows the patterns established in `xllm/benchmarks/`. Key
 **`xllm/benchmarks/utils.py`** — Timer utilities:
 - `cuda_timer(fn, *args, warmup=10, iters=100)` — CUDA event-based GPU timing
 - `make_inputs(batch_size, seq_len, model_dim)` — input tensor factory
-- `print_results(name, results_dict)` — formatted output
+- formatted output helpers for comparing benchmark cases
 - `save_results(all_results, path)` — JSON/CSV export
 
 **`xllm/benchmarks/bench_router.py`** — Best example of line-by-line profiling:
@@ -324,9 +316,9 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 2. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
-6. Run: python validate.py → extract candidate_us, reference_us, correctness, peak_vram_mb
+6. Run: uv run python validate.py → extract candidate_us, reference_us, correctness, peak_vram_mb
 7. Compute speedup = reference_us / candidate_us
-8. Append row to results.tsv (with file lock, parent_id = current_base)
+8. Append row to results/experiments.tsv (with file lock, parent_id = current_base)
 9. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)
@@ -339,7 +331,7 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 Every experiment's branch is preserved regardless of outcome. To inspect any experiment later: `git checkout a{id}/{n}` or `git show a{id}/{n}:candidate/interface.py`.
 
 ### Tools available
-You have access to: `ncu`, `nsight-systems`, and a **microbench agent** (spawns a sub-agent that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table). Use these whenever you need to understand where or why time is being spent.
+You have access to: `ncu`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. Use these whenever you need to understand where or why time is being spent.
 
 ### Optimization strategy
 Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is most appropriate for the hypothesis. Keep changes focused — one hypothesis per experiment.
@@ -356,10 +348,10 @@ Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is mos
 ## 9. Visualization & Analysis (`analysis.py`)
 
 ### Inputs
-- `results.tsv` (the shared experiment log)
+- `results/experiments.tsv` (the shared experiment log)
 
 ### Outputs
-1. `progress.png` — main visualization
+1. `progress.html` — main visualization
 2. Terminal summary — printed to stdout
 3. `report.md` — markdown session report (optional)
 
@@ -452,7 +444,7 @@ Based on experiment history, generate actionable suggestions:
 
 ---
 
-## 10. File Locking for Shared results.tsv
+## 10. File Locking for Shared results/experiments.tsv
 
 Multiple agents append to the same file concurrently. Use OS-level file locking:
 
@@ -461,7 +453,7 @@ import fcntl
 import os
 
 def append_result(csv_path: str, row: dict, columns: list[str]) -> None:
-    """Atomically append a row to the shared results.tsv."""
+    """Atomically append a row to the shared results/experiments.tsv."""
     line = "\t".join(str(row.get(col, "")) for col in columns) + "\n"
 
     with open(csv_path, "a") as f:
@@ -475,7 +467,7 @@ def append_result(csv_path: str, row: dict, columns: list[str]) -> None:
 
 
 def read_results(csv_path: str) -> list[dict]:
-    """Read results.tsv with shared lock (allows concurrent reads)."""
+    """Read results/experiments.tsv with shared lock (allows concurrent reads)."""
     import csv
 
     with open(csv_path, "r") as f:
@@ -493,11 +485,16 @@ def read_results(csv_path: str) -> list[dict]:
 
 ### First-time setup (human runs once)
 ```bash
-# Initialize results.tsv with header
-printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results.tsv
+# Initialize results/experiments.tsv with header
+mkdir -p results
+printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work
-python validate.py  # should PASS with reference implementation
+uv run python validate.py  # should PASS with reference implementation
+
+# Make task files available to all git worktrees
+git add validate.py reference.py candidate/
+git commit -m "task setup"
 ```
 
 ### Per-agent setup (automated)
@@ -505,10 +502,10 @@ python validate.py  # should PASS with reference implementation
 # Agent receives: AGENT_ID, CUDA_VISIBLE_DEVICES, WORKTREE_PATH
 # Agent does:
 cd $WORKTREE_PATH
-# Already on branch a{AGENT_ID}/0 (created by launch script)
+# Baseline branch a{AGENT_ID}/0 was created by the launcher.
 
 # Run baseline
-python validate.py → extract reference_us, candidate_us (should be same as reference initially)
+uv run python validate.py → extract reference_us, candidate_us (should be same as reference initially)
 
 # Record baseline
 append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="baseline")
@@ -544,9 +541,9 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="basel
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
 | 2 | `profile_utils.py` | `profile_utils.py` | `cuda_timer`, `cpu_timer`, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Kernel microbench agent | `.claude/agents/microbench.md` or equivalent | Agent definition for sub-op bottleneck analysis |
-| 5 | Launch script | `scripts/launch_agents.sh` | Multi-GPU agent launcher with worktree setup |
-| 6 | Results CSV init | Part of setup | Header row creation + baseline recording |
+| 4 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Sub-op bottleneck analysis |
+| 5 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
+| 6 | Results TSV init | Part of setup | Header row creation + baseline recording |
 
 ### What NOT to implement (already exists / human-provided)
 - `validate.py` — provided by human

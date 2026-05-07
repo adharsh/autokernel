@@ -23,7 +23,7 @@ You are a microbenchmarking agent. You write and run line-by-line microbenchmark
 
 ## Utilities
 
-Use `cuda_timer` and `print_results` from `profile_utils.py`:
+Use `cuda_timer` and `cpu_timer` from `profile_utils.py`:
 
 ```python
 from profile_utils import cuda_timer, cpu_timer
