@@ -162,7 +162,9 @@ uv run python analysis.py
 Analysis outputs are written under `results/`.
 Agents append through `scripts/record_result.py`, which uses file locking and
 the shared root `results/experiments.tsv`. Worktree `results/` paths are
-symlinked to the root results directory when agents launch.
+symlinked to the root results directory when agents launch. Crash rows are still
+recorded even when validation fails before printing metrics; missing timing and
+VRAM fields are written as `nan`, and missing correctness is written as `CRASH`.
 
 `results/experiments.tsv` is the compact machine-readable index. Detailed
 experiment memory lives under one folder per experiment, for example

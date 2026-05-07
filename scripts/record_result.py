@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -35,11 +35,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def read_metric(text: str, key: str) -> str:
+def read_metric(
+    text: str,
+    key: str,
+    *,
+    required: bool = True,
+    default: str = "",
+) -> str:
     match = re.search(rf"^{re.escape(key)}:\s*(.+?)\s*$", text, re.MULTILINE)
     if not match:
-        raise RuntimeError(f"Missing `{key}:` in run log")
-    return match.group(1)
+        if required:
+            raise RuntimeError(f"Missing `{key}:` in run log")
+        return default
+    return match.group(1).strip()
+
+
+def read_run_log(path: Path, *, status: str) -> str:
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        if status == "crash":
+            return ""
+        raise
 
 
 def current_commit() -> str:
@@ -50,11 +67,31 @@ def current_commit() -> str:
 
 
 def speedup(reference_us: str, candidate_us: str) -> str:
-    reference = float(reference_us)
-    candidate = float(candidate_us)
+    try:
+        reference = float(reference_us)
+        candidate = float(candidate_us)
+    except (TypeError, ValueError):
+        return "nan"
     if not math.isfinite(reference) or not math.isfinite(candidate) or candidate <= 0:
         return "nan"
     return f"{reference / candidate:.6f}"
+
+
+def metrics_from_log(text: str, *, status: str) -> dict[str, str]:
+    if status == "crash":
+        return {
+            "candidate_us": read_metric(text, "candidate_us", required=False, default="nan"),
+            "reference_us": read_metric(text, "reference_us", required=False, default="nan"),
+            "correctness": read_metric(text, "correctness", required=False, default="CRASH"),
+            "peak_vram_mb": read_metric(text, "peak_vram_mb", required=False, default="nan"),
+        }
+
+    return {
+        "candidate_us": read_metric(text, "candidate_us"),
+        "reference_us": read_metric(text, "reference_us"),
+        "correctness": read_metric(text, "correctness"),
+        "peak_vram_mb": read_metric(text, "peak_vram_mb"),
+    }
 
 
 def main() -> None:
@@ -62,13 +99,10 @@ def main() -> None:
     if not args.agent_id:
         raise RuntimeError("Missing --agent-id or AGENT_ID environment variable")
 
-    text = args.run_log.read_text()
-    candidate_us = read_metric(text, "candidate_us")
-    reference_us = read_metric(text, "reference_us")
-    correctness = read_metric(text, "correctness")
-    peak_vram_mb = read_metric(text, "peak_vram_mb")
+    text = read_run_log(args.run_log, status=args.status)
+    metrics = metrics_from_log(text, status=args.status)
 
-    if args.status == "keep" and correctness != "PASS":
+    if args.status == "keep" and metrics["correctness"] != "PASS":
         raise RuntimeError("Refusing to record a non-PASS result with status=keep")
 
     row = {
@@ -76,12 +110,12 @@ def main() -> None:
         "parent_id": args.parent_id,
         "agent_id": args.agent_id,
         "commit": current_commit(),
-        "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "candidate_us": candidate_us,
-        "reference_us": reference_us,
-        "speedup": speedup(reference_us, candidate_us),
-        "correctness": correctness,
-        "peak_vram_mb": peak_vram_mb,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "candidate_us": metrics["candidate_us"],
+        "reference_us": metrics["reference_us"],
+        "speedup": speedup(metrics["reference_us"], metrics["candidate_us"]),
+        "correctness": metrics["correctness"],
+        "peak_vram_mb": metrics["peak_vram_mb"],
         "status": args.status,
         "description": args.description,
     }

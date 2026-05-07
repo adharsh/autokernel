@@ -197,6 +197,9 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
 ```
 
 Use this script for every result, including crashes and failed experiments. It parses the experiment `run.log`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, and do not use `echo >>` for experiment rows.
+For `status=crash`, the script still appends a row if the run log is missing
+some or all metrics; missing timing/VRAM values are recorded as `nan` and
+missing correctness is recorded as `CRASH`.
 
 ### 10. Write Detailed Note
 

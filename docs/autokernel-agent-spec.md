@@ -94,6 +94,11 @@ append so tabs and newlines inside descriptions cannot corrupt row structure.
 Use `scripts/format_results.py` for aligned human-readable output instead of
 padding or manually editing the TSV.
 
+`scripts/record_result.py` must be used for every result, including crashes. For
+`status=crash`, it appends a row even if validation failed before printing all
+metrics; missing timing/VRAM values are recorded as `nan`, and missing
+correctness is recorded as `CRASH`.
+
 ## 2.1 Experiment Artifacts
 
 `results/experiments.tsv` is the compact index. Detailed shared memory lives
