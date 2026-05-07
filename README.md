@@ -120,6 +120,9 @@ uv run python analysis.py
 ```
 
 Analysis outputs are written under `results/`.
+Agents append through `scripts/record_result.py`, which uses file locking and
+the shared root `results/experiments.tsv`. Worktree `results/` paths are
+symlinked to the root results directory when agents launch.
 
 ## Profiling Permissions
 

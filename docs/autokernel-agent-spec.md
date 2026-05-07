@@ -22,6 +22,7 @@ autokernel/
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
     ├── calibrate_reference.py # One-time reference timing calibration
+    ├── record_result.py      # File-locked experiment row appender
     └── setup.sh             # Local setup helper
 ```
 
@@ -74,7 +75,7 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 | `status` | string | `keep` | `keep`, `discard`, or `crash` |
 | `description` | string | `fuse norm+proj` | Short description of what was tried |
 
-**Concurrency**: Multiple agents append to the same file. Use `fcntl.flock()` for atomic writes. Each agent opens in append mode, locks, writes one line, unlocks.
+**Concurrency**: Multiple agents append to the same file. Use `scripts/record_result.py`, which calls `profile_utils.append_result()` and uses `fcntl.flock()` for atomic writes. Agents must not use `echo >>` for experiment rows.
 
 ---
 
@@ -329,7 +330,7 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
 6. Run: uv run python validate.py → extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
 7. Compute speedup = reference_us / candidate_us
-8. Append row to the shared root results/experiments.tsv (with file lock, parent_id = current_base)
+8. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
 9. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)

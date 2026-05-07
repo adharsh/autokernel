@@ -125,6 +125,46 @@ _check_reference_calibration() {
   exit 1
 }
 
+_prepare_worktree_results_link() {
+  local worktree="$1"
+  local local_results="$worktree/results"
+  local backup
+  local expected
+  local actual
+
+  if [ "$worktree" = "$ROOT" ]; then
+    return
+  fi
+
+  if [ ! -d "$worktree" ]; then
+    echo "Missing worktree: $worktree" >&2
+    exit 1
+  fi
+
+  expected=$(readlink -f "$RESULTS_DIR")
+
+  if [ -L "$local_results" ]; then
+    actual=$(readlink -f "$local_results")
+    if [ "$actual" != "$expected" ]; then
+      echo "$local_results points to $actual, expected $expected" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  if [ -e "$local_results" ]; then
+    if [ -d "$local_results" ] && [ -z "$(find "$local_results" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+      rmdir "$local_results"
+    else
+      backup="$worktree/results.local.$(date -u +%Y%m%dT%H%M%SZ)"
+      echo "archiving existing worktree-local results: $local_results -> $backup"
+      mv "$local_results" "$backup"
+    fi
+  fi
+
+  ln -s "$RESULTS_DIR" "$local_results"
+}
+
 _check_task_files() {
   local num_gpus="$1"
   local file
@@ -301,6 +341,7 @@ cmd_start() {
       if [ ! -d "$WORKTREE" ]; then
         git worktree add "$WORKTREE" "$BASELINE_BRANCH"
       fi
+      _prepare_worktree_results_link "$WORKTREE"
     fi
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
@@ -354,6 +395,7 @@ cmd_resume() {
     WORKTREE="$ROOT"
     if [ "$GPU_ID" -gt 0 ]; then
       WORKTREE="$ROOT/worktree-a${AGENT_ID}"
+      _prepare_worktree_results_link "$WORKTREE"
     fi
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"

@@ -39,9 +39,14 @@ git branch a${AGENT_ID}/0 HEAD 2>/dev/null || true
 mkdir -p "$(dirname "$AUTOKERNEL_EXPERIMENTS_TSV")"
 uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
+uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
+  --experiment-id "a${AGENT_ID}/0" \
+  --parent-id "-" \
+  --status keep \
+  --description baseline
 ```
 
-Append baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with `experiment_id=a{AGENT_ID}/0`, `parent_id=-`, `status=keep`, `description=baseline`. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
 
 ## Experiment Loop (NEVER STOP)
 
@@ -84,7 +89,17 @@ speedup = reference_us / candidate_us
 
 ### 7. Log result
 
-Append one tab-separated row to `$AUTOKERNEL_EXPERIMENTS_TSV`. Use `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`.
+Append one tab-separated row to `$AUTOKERNEL_EXPERIMENTS_TSV` using:
+
+```bash
+uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
+  --experiment-id "a${AGENT_ID}/${n}" \
+  --parent-id "${current_base}" \
+  --status "${status}" \
+  --description "${description}"
+```
+
+Use this script for every result. It parses `run.log`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, and do not use `echo >>` for experiment rows.
 
 Columns (tab-separated):
 
