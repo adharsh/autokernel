@@ -182,8 +182,10 @@ print_next_steps() {
   cat <<'EOF'
 
 Next steps:
-1. Edit root reference.py with the trusted implementation.
-2. Edit root validate.py with task-specific inputs, tolerances, and timing cases.
+1. Use an AI coding tool or edit by hand to fill root reference.py with
+   the trusted implementation.
+2. Use an AI coding tool or edit by hand to fill root validate.py with
+   task-specific inputs, edge cases, tolerances, and timing cases.
 3. Temporarily make candidate/interface.py call reference.kernel_fn, then run:
    uv run python validate.py
 4. Revert candidate/interface.py to the optimization entry point.
