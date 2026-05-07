@@ -361,7 +361,7 @@ cmd_start() {
   echo ""
   echo "All agents launched. Monitor with:"
   echo "  tail -f $LOGS_DIR/agent*.log"
-  echo "  cat $TSV | column -t -s\$'\\t'"
+  echo "  uv run python scripts/format_results.py --sort agent"
   echo ""
   echo "  ./scripts/agents.sh status"
   echo "  ./scripts/agents.sh stop"

@@ -155,6 +155,7 @@ The launcher detects GPUs with `nvidia-smi` and starts one agent per GPU. Agent 
 ./scripts/agents.sh stop
 ./scripts/agents.sh resume
 tail -F results/logs/agent0.log
+uv run python scripts/format_results.py --sort agent
 uv run python analysis.py
 ```
 
@@ -170,6 +171,10 @@ should be written for every experiment; `note.md`, `run.log`, NCU reports, and
 optional artifacts live under the per-experiment folder. `analysis.py` audits
 this coverage and flags notes that are missing the required NCU, speed-of-light,
 design-decision, or codegen/PTX/SASS sections.
+
+Keep `results/experiments.tsv` as raw tab-separated data. Use
+`scripts/format_results.py` for aligned human-readable output; do not pad or
+manually edit the TSV.
 
 ## Profiling Permissions
 

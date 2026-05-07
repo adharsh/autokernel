@@ -148,6 +148,13 @@ def init_results_tsv(tsv_path: str) -> None:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+def _tsv_cell(value: Any) -> str:
+    """Format one TSV cell without allowing embedded row/column separators."""
+    if value is None:
+        return ""
+    return str(value).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+
 def append_result(
     tsv_path: str,
     row: dict,
@@ -165,7 +172,7 @@ def append_result(
     if parent:
         os.makedirs(parent, exist_ok=True)
 
-    line = "\t".join(str(row.get(col, "")) for col in columns) + "\n"
+    line = "\t".join(_tsv_cell(row.get(col, "")) for col in columns) + "\n"
 
     with open(tsv_path, "a") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)

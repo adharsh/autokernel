@@ -89,6 +89,11 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 
 **Concurrency**: Multiple agents append to the same file. Use `scripts/record_result.py`, which calls `profile_utils.append_result()` and uses `fcntl.flock()` for atomic writes. Agents must not use `echo >>` for experiment rows.
 
+The TSV is intentionally raw tab-separated data. Values are sanitized before
+append so tabs and newlines inside descriptions cannot corrupt row structure.
+Use `scripts/format_results.py` for aligned human-readable output instead of
+padding or manually editing the TSV.
+
 ## 2.1 Experiment Artifacts
 
 `results/experiments.tsv` is the compact index. Detailed shared memory lives
