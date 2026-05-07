@@ -376,6 +376,7 @@ cmd_resume() {
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
   echo "Resuming agents from previous sessions..."
+  _check_task_files "$NUM_GPUS"
   _check_reference_calibration
 
   _init_results_tsv
