@@ -8,6 +8,7 @@ set -euo pipefail
 # - Claude/Codex microbench discovery links
 # - root validate.py/reference.py from templates when missing
 # - results/experiments.tsv initialization
+# - calibrated reference timing reminder
 # - optional lightweight environment checks
 #
 # It intentionally does not fill in task-specific benchmark logic.
@@ -185,8 +186,9 @@ Next steps:
 1. Use an AI coding tool or edit by hand to fill root reference.py with
    the trusted implementation.
 2. Use an AI coding tool or edit by hand to fill root validate.py with
-   task-specific inputs, edge cases, tolerances, and timing cases.
+   exactly one stress benchmark case plus separate correctness-only edge cases.
 3. Temporarily make candidate/interface.py call reference.kernel_fn, then run:
+   uv run python scripts/calibrate_reference.py
    uv run python validate.py
 4. Revert candidate/interface.py to the optimization entry point.
 5. Commit validate.py, reference.py, and any task setup so worktrees can see them.

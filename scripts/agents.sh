@@ -14,6 +14,7 @@ ROOT=$(pwd)
 RESULTS_DIR="$ROOT/results"
 LOGS_DIR="$RESULTS_DIR/logs"
 TSV="$RESULTS_DIR/experiments.tsv"
+REFERENCE_TIMING_PATH="$RESULTS_DIR/reference_timing.json"
 PID_FILE="$ROOT/.agent_pids"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
 
@@ -114,6 +115,16 @@ _init_results_tsv() {
   fi
 }
 
+_check_reference_calibration() {
+  if [ -s "$REFERENCE_TIMING_PATH" ]; then
+    return
+  fi
+
+  echo "Missing calibrated reference timing: $REFERENCE_TIMING_PATH" >&2
+  echo "Run: uv run python scripts/calibrate_reference.py" >&2
+  exit 1
+}
+
 _check_task_files() {
   local num_gpus="$1"
   local file
@@ -163,6 +174,10 @@ _launch_agent() {
 
       AGENT_ID=$agent_id \
         WORKTREE_PATH=$worktree \
+        AUTOKERNEL_ROOT=$ROOT \
+        AUTOKERNEL_RESULTS_DIR=$RESULTS_DIR \
+        AUTOKERNEL_EXPERIMENTS_TSV=$TSV \
+        AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
         CUDA_VISIBLE_DEVICES=$gpu_id \
         "$CLAUDE_BIN" -p \
           "${claude_resume_args[@]}" \
@@ -184,6 +199,10 @@ _launch_agent() {
       cd "$worktree"
       AGENT_ID=$agent_id \
         WORKTREE_PATH=$worktree \
+        AUTOKERNEL_ROOT=$ROOT \
+        AUTOKERNEL_RESULTS_DIR=$RESULTS_DIR \
+        AUTOKERNEL_EXPERIMENTS_TSV=$TSV \
+        AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
         CUDA_VISIBLE_DEVICES=$gpu_id \
         "$CODEX_BIN" "${codex_cmd[@]}" \
           "${CODEX_COMMON_ARGS[@]}" \
@@ -256,6 +275,7 @@ cmd_start() {
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
   _check_task_files "$NUM_GPUS"
+  _check_reference_calibration
 
   # Find next free agent prefix by checking existing a{N}/{M} branches
   MAX_PREFIX=$(git branch --list 'a*/*' | grep -oP '(?<=\ba)\d+(?=/)' | sort -n | tail -1 || true)
@@ -288,7 +308,7 @@ cmd_start() {
     : > "$LOG"
 
     _launch_agent start "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything."
+      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Start the experiment loop now. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
@@ -312,6 +332,7 @@ cmd_resume() {
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
   echo "Resuming agents from previous sessions..."
+  _check_reference_calibration
 
   _init_results_tsv
   mkdir -p "$LOGS_DIR"
@@ -339,7 +360,7 @@ cmd_resume() {
     echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
     _launch_agent resume "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You were interrupted. Read results/experiments.tsv to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything."
+      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"

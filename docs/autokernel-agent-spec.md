@@ -15,11 +15,13 @@ autokernel/
 │   └── interface.py         # Agent edits THIS — all optimization code, bindings, utilities
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
 ├── results/
-│   └── experiments.tsv      # Shared, append-only experiment log (tab-separated)
+│   ├── experiments.tsv      # Shared, append-only experiment log (tab-separated)
+│   └── reference_timing.json # Calibrated reference timing for the stress case
 ├── analysis.py              # Plotting + reports from results/experiments.tsv
 ├── profile_utils.py         # cuda_timer, cpu_timer, shared profiling utilities
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
+    ├── calibrate_reference.py # One-time reference timing calibration
     └── setup.sh             # Local setup helper
 ```
 
@@ -34,6 +36,15 @@ autokernel/
 | `results/experiments.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |
+
+### Validation Harness Contract
+
+`validate.py` separates timing from correctness:
+
+- It defines exactly one stress benchmark case. This is the performance target.
+- `scripts/calibrate_reference.py` times `reference.kernel_fn` on that stress case once and writes `results/reference_timing.json`.
+- Every `validate.py` run times `candidate.kernel_fn` on that same stress case and prints the calibrated `reference_us`.
+- Correctness-only cases broaden behavioral coverage but do not change the reported `candidate_us` or `reference_us` timing case.
 
 ---
 
@@ -56,7 +67,7 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 | `commit` | string | `a1b2c3d` | 7-char git commit hash |
 | `timestamp` | ISO8601 | `2026-03-20T14:32:00` | When the experiment completed |
 | `candidate_us` | float | `42.3` | Candidate kernel latency in microseconds |
-| `reference_us` | float | `85.1` | Reference implementation latency in microseconds |
+| `reference_us` | float | `85.1` | Calibrated reference latency in microseconds for the single stress benchmark case |
 | `speedup` | float | `2.01` | `reference_us / candidate_us` |
 | `correctness` | string | `PASS` | `PASS`, `FAIL`, or `CRASH` |
 | `peak_vram_mb` | float | `2048.5` | Peak GPU memory used during benchmark |
@@ -121,7 +132,7 @@ Every experiment gets its own branch. No resets, no master branch. `current_base
 2. Agent edits candidate/interface.py
 3. git add candidate/ && git commit -m "a0/1: fuse norm+proj"
 4. Run validate.py → get results
-5. Append row to results/experiments.tsv
+5. Append row to shared root results/experiments.tsv
 6. If keep:   current_base = a0/1           # advance
 7. If discard/crash: git checkout {current_base}  # go back to last keep. That's it.
 ```
@@ -316,9 +327,9 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 2. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
-6. Run: uv run python validate.py → extract candidate_us, reference_us, correctness, peak_vram_mb
+6. Run: uv run python validate.py → extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
 7. Compute speedup = reference_us / candidate_us
-8. Append row to results/experiments.tsv (with file lock, parent_id = current_base)
+8. Append row to the shared root results/experiments.tsv (with file lock, parent_id = current_base)
 9. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)
@@ -369,7 +380,7 @@ Use whichever backend (PyTorch, Triton, CUDA C++, CUTLASS, CUTE DSL, PTX) is mos
   - Agent 3: diamonds
   - (etc.)
 - **Running minimum step line** (`#27ae60`): frontier of best latency achieved
-- **Reference baseline dashed line** (`#3498db`): reference implementation latency
+- **Reference baseline dashed line** (`#3498db`): calibrated reference latency for the stress benchmark case
 - **Annotations**: Top-3 improvements labeled with descriptions
 - **Title**: includes total experiment count and number of kept improvements
 
@@ -490,6 +501,7 @@ mkdir -p results
 printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work
+uv run python scripts/calibrate_reference.py
 uv run python validate.py  # should PASS with reference implementation
 
 # Make task files available to all git worktrees
@@ -499,13 +511,15 @@ git commit -m "task setup"
 
 ### Per-agent setup (automated)
 ```bash
-# Agent receives: AGENT_ID, CUDA_VISIBLE_DEVICES, WORKTREE_PATH
+# Agent receives:
+# AGENT_ID, CUDA_VISIBLE_DEVICES, WORKTREE_PATH,
+# AUTOKERNEL_EXPERIMENTS_TSV, AUTOKERNEL_REFERENCE_TIMING_PATH
 # Agent does:
 cd $WORKTREE_PATH
 # Baseline branch a{AGENT_ID}/0 was created by the launcher.
 
-# Run baseline
-uv run python validate.py → extract reference_us, candidate_us (should be same as reference initially)
+# Run baseline. reference_us is the calibrated constant for the stress case.
+uv run python validate.py → extract reference_us, candidate_us
 
 # Record baseline
 append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="baseline")

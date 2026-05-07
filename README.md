@@ -7,8 +7,9 @@ The main workflow is:
 1. Set up the repo.
 2. Fill in the task-specific reference and validation files.
 3. Smoke test the task.
-4. Commit the task setup so worktrees can see it.
-5. Launch one optimization agent per GPU.
+4. Calibrate the reference timing.
+5. Commit the task setup so worktrees can see it.
+6. Launch one optimization agent per GPU.
 
 ## Prerequisites
 
@@ -50,20 +51,34 @@ Before launching agents, populate these files:
 | `validate.py` | Fixed correctness, timing, and input test cases. |
 | `candidate/interface.py` | Starting optimization entry point exposed as `kernel_fn`. |
 
+Root `reference.py` and `validate.py` are task-specific. Reusable harness
+policy belongs in `docs/templates/` so future tasks inherit it.
+
 This is a good step to do with an AI coding tool before starting the autonomous agents. Give the tool the target function, expected shapes, dtypes, edge cases, and desired output layout, then ask it to fill `reference.py` and `validate.py`.
 
 For example, ask it to:
 
 - put the trusted implementation in `reference.kernel_fn`
-- build `validate.py` test cases for representative shapes and edge cases
+- define exactly one stress/benchmark case in `validate.py`; this same case is used for calibrated reference timing and candidate timing
+- build separate correctness-only cases for representative shapes and edge cases
 - compare both returned outputs and final state tensors
 - keep the printed labels stable: `candidate_us`, `reference_us`, `correctness`, `peak_vram_mb`
+
+Keep the timing and correctness roles separate:
+
+- The stress/benchmark case should be the performance target agents optimize. Calibrate `reference_us` on this case once, then time every candidate on this same case.
+- Correctness-only cases should broaden coverage without changing the reported timing. Use them for edge cases like optional arguments, width variants, reset-mask behavior, activations, and small shapes.
 
 Run the smoke test:
 
 ```bash
+uv run python scripts/calibrate_reference.py
 uv run python validate.py
 ```
+
+`validate.py` still runs the reference implementation for correctness, but uses
+the calibrated `results/reference_timing.json` value for the printed `reference_us`
+metric. This keeps speedup reporting stable across agent experiments.
 
 Commit the task setup before running multiple agents:
 

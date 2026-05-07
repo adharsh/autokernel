@@ -11,6 +11,8 @@ Environment variables you receive:
 | `AGENT_ID` | `0` | Your numeric agent ID |
 | `WORKTREE_PATH` | `worktree-a0` | Your git worktree directory |
 | `CUDA_VISIBLE_DEVICES` | `0` | Your pinned GPU |
+| `AUTOKERNEL_EXPERIMENTS_TSV` | `/path/to/results/experiments.tsv` | Shared experiment log. Always append here. |
+| `AUTOKERNEL_REFERENCE_TIMING_PATH` | `/path/to/results/reference_timing.json` | Calibrated reference runtime used by `validate.py`. |
 
 ### File rules
 
@@ -19,7 +21,7 @@ Environment variables you receive:
 | `validate.py` | NO | Never modify. Run it to test. |
 | `reference.py` | NO | Never modify. Ground truth. |
 | `candidate/` | YES | All your optimization code goes here. `interface.py` is the Python entry point that `validate.py` imports. You may create additional files (`.py`, `.cu`, `.cuh`, etc.) inside `candidate/`. |
-| `results/experiments.tsv` | APPEND-ONLY | Never delete or rewrite rows. |
+| `$AUTOKERNEL_EXPERIMENTS_TSV` | APPEND-ONLY | Never delete or rewrite rows. |
 
 Do not commit `results/` or `run.log` to git. Leave them untracked.
 
@@ -34,12 +36,12 @@ Examples: `a0/0` (baseline), `a0/1` (first experiment), `a1/3` (agent 1, fourth 
 ```bash
 cd $WORKTREE_PATH
 git branch a${AGENT_ID}/0 HEAD 2>/dev/null || true
-mkdir -p results
+mkdir -p "$(dirname "$AUTOKERNEL_EXPERIMENTS_TSV")"
 uv run python validate.py > run.log 2>&1
 grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" run.log
 ```
 
-Append baseline row to `results/experiments.tsv` with `experiment_id=a{AGENT_ID}/0`, `parent_id=-`, `status=keep`, `description=baseline`. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
+Append baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with `experiment_id=a{AGENT_ID}/0`, `parent_id=-`, `status=keep`, `description=baseline`. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
 
 ## Experiment Loop (NEVER STOP)
 
@@ -82,7 +84,7 @@ speedup = reference_us / candidate_us
 
 ### 7. Log result
 
-Append one tab-separated row to `results/experiments.tsv`. Use `profile_utils.append_result` for file-locked writes when multiple agents share the file, or just `echo -e "..." >> results/experiments.tsv` for single-agent runs.
+Append one tab-separated row to `$AUTOKERNEL_EXPERIMENTS_TSV`. Use `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`.
 
 Columns (tab-separated):
 
@@ -91,6 +93,8 @@ experiment_id  parent_id  agent_id  commit  timestamp  candidate_us  reference_u
 ```
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
+`reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments.
+The reported `candidate_us` and calibrated `reference_us` both correspond to the single stress benchmark case from `validate.make_inputs()`. Correctness-only cases are broader coverage and do not affect the reported timing case.
 
 ### 8. Keep or discard
 
