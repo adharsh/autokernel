@@ -126,6 +126,11 @@ _check_reference_calibration() {
   exit 1
 }
 
+_agent_worktree_path() {
+  local agent_id="$1"
+  printf "%s/worktree-a%s\n" "$ROOT" "$agent_id"
+}
+
 _prepare_worktree_results_link() {
   local worktree="$1"
   local local_results="$worktree/results"
@@ -134,7 +139,8 @@ _prepare_worktree_results_link() {
   local actual
 
   if [ "$worktree" = "$ROOT" ]; then
-    return
+    echo "Refusing to use repo root as an agent worktree: $ROOT" >&2
+    exit 1
   fi
 
   if [ ! -d "$worktree" ]; then
@@ -167,32 +173,25 @@ _prepare_worktree_results_link() {
 }
 
 _check_task_files() {
-  local num_gpus="$1"
   local file
-  local untracked=()
+  local dirty
 
-  for file in validate.py reference.py; do
+  for file in validate.py reference.py candidate/interface.py; do
     if [ ! -f "$ROOT/$file" ]; then
       echo "Missing $file. Run ./scripts/setup.sh, then fill in the task-specific implementation before launching agents." >&2
       exit 1
     fi
-    if ! git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
-      untracked+=("$file")
-    fi
   done
 
-  if [ "${#untracked[@]}" -eq 0 ]; then
+  dirty=$(git status --porcelain -- validate.py reference.py candidate)
+  if [ -z "$dirty" ]; then
     return
   fi
 
-  if [ "$num_gpus" -gt 1 ]; then
-    echo "Untracked task files: ${untracked[*]}" >&2
-    echo "Commit them before launching multiple agents so new worktrees contain the validation harness." >&2
-    exit 1
-  fi
-
-  echo "warning: untracked task files: ${untracked[*]}" >&2
-  echo "warning: commit them before multi-agent runs so worktrees contain the validation harness." >&2
+  echo "Uncommitted task setup changes:" >&2
+  printf "%s\n" "$dirty" >&2
+  echo "Commit or stash validate.py, reference.py, and candidate/ before launching agents so every worktree sees the same task setup." >&2
+  exit 1
 }
 
 # Sets: _agent_pid
@@ -317,7 +316,7 @@ cmd_start() {
   echo "Detected $NUM_GPUS GPU(s)"
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
-  _check_task_files "$NUM_GPUS"
+  _check_task_files
   _check_reference_calibration
 
   # Find next free agent prefix by checking existing a{N}/{M} branches
@@ -338,14 +337,11 @@ cmd_start() {
     BASELINE_BRANCH="a${AGENT_ID}/0"
     git branch "$BASELINE_BRANCH" HEAD 2>/dev/null || true
 
-    WORKTREE="$ROOT"
-    if [ "$GPU_ID" -gt 0 ]; then
-      WORKTREE="$ROOT/worktree-a${AGENT_ID}"
-      if [ ! -d "$WORKTREE" ]; then
-        git worktree add "$WORKTREE" "$BASELINE_BRANCH"
-      fi
-      _prepare_worktree_results_link "$WORKTREE"
+    WORKTREE=$(_agent_worktree_path "$AGENT_ID")
+    if [ ! -d "$WORKTREE" ]; then
+      git worktree add "$WORKTREE" "$BASELINE_BRANCH"
     fi
+    _prepare_worktree_results_link "$WORKTREE"
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
     echo "Launching agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
@@ -371,36 +367,39 @@ cmd_start() {
 cmd_resume() {
   _require_agent_cli
 
+  if [ ! -s "$PID_FILE" ]; then
+    echo "No .agent_pids file found. Run ./scripts/agents.sh start before resume." >&2
+    exit 1
+  fi
+
+  local agent_ids=()
+  local line
+  while read -r line; do
+    [ -n "$line" ] || continue
+    _parse_pid_line "$line"
+    agent_ids+=("$_agent_id")
+  done < "$PID_FILE"
+
   NUM_GPUS=$(_detect_num_gpus)
   echo "Detected $NUM_GPUS GPU(s)"
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
   echo "Resuming agents from previous sessions..."
-  _check_task_files "$NUM_GPUS"
+  if [ "${#agent_ids[@]}" -gt "$NUM_GPUS" ]; then
+    echo "Cannot resume ${#agent_ids[@]} agent(s) with only $NUM_GPUS GPU(s) detected." >&2
+    exit 1
+  fi
+  _check_task_files
   _check_reference_calibration
 
   _init_results_tsv
   mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
   : > "$PID_FILE"
 
-  for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do
-    # For resume, we need to find which agent IDs were previously running.
-    # Look at existing log files to determine the mapping.
-    # Fallback: use GPU_ID directly (works if prefix offset was 0).
-    AGENT_ID=$GPU_ID
-
-    # Try to find the most recent log for this GPU slot
-    latest_log=$(ls -t "$LOGS_DIR"/agent*.log 2>/dev/null | sed -n "$((GPU_ID + 1))p" || true)
-    if [ -n "$latest_log" ]; then
-      base=$(basename "$latest_log" .log)
-      AGENT_ID=${base#agent}
-    fi
-
-    WORKTREE="$ROOT"
-    if [ "$GPU_ID" -gt 0 ]; then
-      WORKTREE="$ROOT/worktree-a${AGENT_ID}"
-      _prepare_worktree_results_link "$WORKTREE"
-    fi
+  for GPU_ID in "${!agent_ids[@]}"; do
+    AGENT_ID=${agent_ids[$GPU_ID]}
+    WORKTREE=$(_agent_worktree_path "$AGENT_ID")
+    _prepare_worktree_results_link "$WORKTREE"
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
     echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"

@@ -239,7 +239,7 @@ PRs add overhead that slows rapid iteration. Create summary PRs post-hoc if need
 ### Architecture
 ```
 results/experiments.tsv        (shared, append-only, file-locked)
-├── ./             (GPU 0, main repo; baseline branch a0/0 exists)
+├── worktree-a0/   (GPU 0, branch a0/0)
 ├── worktree-a1/   (GPU 1, branch a1/0)
 └── worktree-a2/   (GPU 2, branch a2/0)
 ```
@@ -254,7 +254,7 @@ Each agent is a Codex or Claude process running with a pinned GPU:
 AGENT_CLI=claude ./scripts/agents.sh start
 ```
 
-The launcher detects GPUs with `nvidia-smi`, initializes `results/experiments.tsv`, creates `a{id}/0` baseline branches, adds worktrees for agents 1+, and writes logs under `results/logs/`.
+The launcher detects GPUs with `nvidia-smi`, initializes `results/experiments.tsv`, creates `a{id}/0` baseline branches, adds one worktree per agent, and writes logs under `results/logs/`.
 
 ---
 

@@ -130,15 +130,15 @@ If this fails because hardware counters are restricted, see
 
 ## 6. Commit The Task Setup
 
-Commit the fixed task setup before running multiple agents:
+Commit the fixed task setup before launching agents:
 
 ```bash
 git add validate.py reference.py candidate/
 git commit -m "task setup"
 ```
 
-Git worktrees only contain tracked files, so untracked `validate.py` or
-`reference.py` files will not be visible to secondary agents.
+Git worktrees only contain committed files, so uncommitted task setup changes
+will not be visible to agents.
 
 Restart Claude Code and/or Codex after setup so the microbench agent/skill is
 discovered.
@@ -162,8 +162,9 @@ AGENT_CLI=claude ./scripts/agents.sh start
 
 Claude launches with `claude-opus-4-7` at `high` effort.
 
-The launcher detects GPUs with `nvidia-smi` and starts one agent per GPU. Agent
-0 runs in the repo root; agents 1+ run in separate git worktrees.
+The launcher detects GPUs with `nvidia-smi` and starts one agent per GPU. Every
+agent runs in its own git worktree, including agent 0 at `worktree-a0`, so the
+repo root remains the human/control checkout.
 
 ## 8. Operate
 
