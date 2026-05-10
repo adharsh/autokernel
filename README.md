@@ -83,15 +83,14 @@ Validation requirements:
 
 - Put the trusted implementation in `reference.kernel_fn`.
 - Define exactly one stress/benchmark case in `validate.py`; this same case is
-  used for calibrated reference timing and candidate timing.
+  used for calibrated reference timing and NCU candidate profiling.
 - Expose that timing case through `validate.make_stress_inputs()`.
 - Build separate correctness-only cases for representative shapes and edge
   cases.
 - Compare all returned outputs, including state tensors.
-- Keep the printed labels stable: `candidate_us`, `reference_us`,
-  `correctness`, `peak_vram_mb`.
+- Keep the printed labels stable: `reference_us`, `correctness`, `peak_vram_mb`.
 - Keep timing and correctness roles separate. Correctness-only cases broaden
-  coverage but must not change the reported timing case.
+  coverage but must not change the profiled timing case.
 
 ## 4. Calibrate And Validate
 
@@ -102,20 +101,19 @@ uv run python scripts/calibrate_reference.py
 uv run python validate.py
 ```
 
-`scripts/calibrate_reference.py` times `reference.kernel_fn` once on the single
-stress benchmark case and stores `results/reference_timing.json`.
+`scripts/calibrate_reference.py` profiles `reference.kernel_fn` once with
+Nsight Compute on the single stress benchmark case and stores
+`results/reference_timing.json`.
 
 `validate.py` still runs the reference implementation for correctness, but uses
 the calibrated `results/reference_timing.json` value for the printed
 `reference_us` metric. This keeps speedup reporting stable across agent
 experiments.
 
-Candidate validation and reference calibration both default to 20 warmup runs
-and 200 measured iterations. Override candidate timing with
-`AUTOKERNEL_CANDIDATE_WARMUP` and `AUTOKERNEL_CANDIDATE_ITERS`; override
-reference calibration with `AUTOKERNEL_REFERENCE_WARMUP` and
-`AUTOKERNEL_REFERENCE_ITERS` or with the calibration script's `--warmup` and
-`--iters` flags.
+Candidate profiling uses `scripts/profile_ncu.sh`, not `validate.py` timing.
+Reference calibration profiles one reference invocation after warmup; override
+its warmup with `AUTOKERNEL_REFERENCE_NCU_WARMUP` or
+`scripts/calibrate_reference.py --warmup`.
 
 ## 5. Check Profiling
 
@@ -183,8 +181,9 @@ Analysis outputs are written under `results/`.
 Agents append through `scripts/record_result.py`, which uses file locking and
 the shared root `results/experiments.tsv`. Worktree `results/` paths are
 symlinked to the root results directory when agents launch. Crash rows are still
-recorded even when validation fails before printing metrics; missing timing and
-VRAM fields are written as `nan`, and missing correctness is written as `CRASH`.
+recorded even when validation fails before printing metrics; missing NCU
+duration and VRAM fields are written as `nan`, and missing correctness is
+written as `CRASH`.
 
 `results/experiments.tsv` is the compact machine-readable index. Detailed
 experiment memory lives under one folder per experiment, for example
@@ -207,10 +206,11 @@ kernels must run the standard extensive Nsight Compute pass:
 scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
 ```
 
-This stores `profile.ncu-rep` and `profile.log` under
-`results/experiments/a{AGENT_ID}_{n}/ncu/`. The plain `validate.py` pass remains
-the source of timing and correctness metrics; the NCU pass is the evidence used
-for speed-of-light analysis and next design decisions.
+This stores `profile.ncu-rep`, `profile.log`, and `details.txt` under
+`results/experiments/a{AGENT_ID}_{n}/ncu/`. The `ncu/details.txt` kernel
+`Duration us` rows are the source of `ncu_duration_us` in
+`results/experiments.tsv`, and their row count is stored as `ncu_kernel_count`;
+`validate.py` remains the source of correctness, `reference_us`, and VRAM.
 
 By default, `scripts/profile_ncu.sh` runs
 `uv run python scripts/profile_candidate_once.py` under Nsight Compute with

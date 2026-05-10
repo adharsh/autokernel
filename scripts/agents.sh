@@ -17,7 +17,7 @@ TSV="$RESULTS_DIR/experiments.tsv"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 REFERENCE_TIMING_PATH="$RESULTS_DIR/reference_timing.json"
 PID_FILE="$ROOT/.agent_pids"
-TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
+TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	description'
 
 # Agent backend. AGENT_CLI accepts: claude, codex.
 # "code" is accepted as a codex alias to avoid accidentally invoking VS Code.
@@ -297,7 +297,7 @@ cmd_status() {
     printf "  a%-4s  PID %-8s  %-8s" "$_agent_id" "$_pid" "$state"
     if [ -f "$TSV" ]; then
       count=$(awk -F'\t' -v a="$_agent_id" '$3 == a' "$TSV" 2>/dev/null | wc -l)
-      best=$(awk -F'\t' -v a="$_agent_id" '$3 == a && $11 == "keep" { if ($8+0 > max) max=$8+0 } END { if (max > 0) printf "%.2fx", max; else print "n/a" }' "$TSV" 2>/dev/null)
+      best=$(awk -F'\t' -v a="$_agent_id" '$3 == a && $12 == "keep" { if ($9+0 > max) max=$9+0 } END { if (max > 0) printf "%.2fx", max; else print "n/a" }' "$TSV" 2>/dev/null)
       printf "  | %3d experiments | best %s" "$count" "$best"
     fi
     echo ""

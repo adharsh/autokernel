@@ -2,7 +2,7 @@
 Profiling and results utilities for the AutoKernel agent system.
 
 Provides:
-- cuda_timer / cpu_timer: Microbenchmark timing functions
+- ncu_duration_rows_us: Nsight Compute duration parser
 - TSV file locking utilities for shared results/experiments.tsv
 - Lineage tree construction from experiment history
 """
@@ -12,9 +12,8 @@ from __future__ import annotations
 import csv
 import fcntl
 import os
-import statistics
-import time
-from typing import Any, Callable
+import re
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # TSV schema
@@ -26,7 +25,8 @@ TSV_COLUMNS: list[str] = [
     "agent_id",
     "commit",
     "timestamp",
-    "candidate_us",
+    "ncu_duration_us",
+    "ncu_kernel_count",
     "reference_us",
     "speedup",
     "correctness",
@@ -35,88 +35,31 @@ TSV_COLUMNS: list[str] = [
     "description",
 ]
 
-# ---------------------------------------------------------------------------
-# Timer utilities
-# ---------------------------------------------------------------------------
+_NCU_DURATION_RE = re.compile(
+    r"^\s*Duration\s+"
+    r"(?P<unit>nsecond|usecond|msecond|second|ns|us|ms|s)\s+"
+    r"(?P<value>[+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*$",
+    re.MULTILINE,
+)
 
 
-def cuda_timer(
-    fn: Callable,
-    *args: Any,
-    warmup: int = 10,
-    iters: int = 100,
-    **kwargs: Any,
-) -> dict:
-    """Time a GPU operation using CUDA events.
-
-    Returns dict with keys: median_ms, mean_ms, min_ms, max_ms, std_ms.
-    """
-    import torch
-
-    for _ in range(warmup):
-        fn(*args, **kwargs)
-    torch.cuda.synchronize()
-
-    timings: list[float] = []
-    for _ in range(iters):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        fn(*args, **kwargs)
-        end.record()
-        torch.cuda.synchronize()
-        timings.append(start.elapsed_time(end))  # ms
-
-    return {
-        "median_ms": statistics.median(timings),
-        "mean_ms": statistics.mean(timings),
-        "min_ms": min(timings),
-        "max_ms": max(timings),
-        "std_ms": statistics.stdev(timings) if len(timings) > 1 else 0.0,
+def ncu_duration_rows_us(details_text: str) -> list[float]:
+    """Return all Nsight Compute kernel Duration rows converted to microseconds."""
+    scale = {
+        "nsecond": 1e-3,
+        "ns": 1e-3,
+        "usecond": 1.0,
+        "us": 1.0,
+        "msecond": 1e3,
+        "ms": 1e3,
+        "second": 1e6,
+        "s": 1e6,
     }
-
-
-def cpu_timer(
-    fn: Callable,
-    *args: Any,
-    warmup: int = 10,
-    iters: int = 100,
-    sync_cuda: bool = True,
-    **kwargs: Any,
-) -> dict:
-    """Time an operation using CPU wall clock.
-
-    sync_cuda=True (default): includes GPU kernel completion time.
-    sync_cuda=False: pure CPU operations only.
-
-    Returns dict with keys: median_ms, mean_ms, min_ms, max_ms, std_ms.
-    """
-    import torch
-
-    should_sync_cuda = sync_cuda and torch.cuda.is_available()
-
-    for _ in range(warmup):
-        fn(*args, **kwargs)
-    if should_sync_cuda:
-        torch.cuda.synchronize()
-
-    timings: list[float] = []
-    for _ in range(iters):
-        if should_sync_cuda:
-            torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        fn(*args, **kwargs)
-        if should_sync_cuda:
-            torch.cuda.synchronize()
-        timings.append((time.perf_counter() - t0) * 1000)  # ms
-
-    return {
-        "median_ms": statistics.median(timings),
-        "mean_ms": statistics.mean(timings),
-        "min_ms": min(timings),
-        "max_ms": max(timings),
-        "std_ms": statistics.stdev(timings) if len(timings) > 1 else 0.0,
-    }
+    durations: list[float] = []
+    for match in _NCU_DURATION_RE.finditer(details_text):
+        value = float(match.group("value").replace(",", ""))
+        durations.append(value * scale[match.group("unit")])
+    return durations
 
 
 # ---------------------------------------------------------------------------

@@ -13,17 +13,14 @@ Environment variables you receive:
 | `CUDA_VISIBLE_DEVICES` | `0` | Your pinned GPU |
 | `AUTOKERNEL_EXPERIMENTS_TSV` | `/path/to/results/experiments.tsv` | Shared experiment log. Always append here. |
 | `AUTOKERNEL_EXPERIMENTS_DIR` | `/path/to/results/experiments` | Per-experiment artifact root. Write detailed files under one folder per experiment. |
-| `AUTOKERNEL_REFERENCE_TIMING_PATH` | `/path/to/results/reference_timing.json` | Calibrated reference runtime used by `validate.py`. |
+| `AUTOKERNEL_REFERENCE_TIMING_PATH` | `/path/to/results/reference_timing.json` | Calibrated NCU reference runtime used by `validate.py`. |
 
 Optional timing overrides:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTOKERNEL_CANDIDATE_WARMUP` | `20` | Candidate validation warmup calls. |
-| `AUTOKERNEL_CANDIDATE_ITERS` | `200` | Candidate validation measured calls. |
-| `AUTOKERNEL_REFERENCE_WARMUP` | `20` | Reference calibration warmup calls. |
-| `AUTOKERNEL_REFERENCE_ITERS` | `200` | Reference calibration measured calls. |
-| `AUTOKERNEL_NCU_WARMUP` | candidate warmup | Warmup calls before the single profiled candidate invocation. |
+| `AUTOKERNEL_REFERENCE_NCU_WARMUP` | `20` | Reference warmup calls before the NCU-profiled calibration invocation. |
+| `AUTOKERNEL_NCU_WARMUP` | `20` | Warmup calls before the single profiled candidate invocation. |
 
 ### File rules
 
@@ -126,8 +123,9 @@ SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
+grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 scripts/profile_ncu.sh "a${AGENT_ID}/0"
+grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
 uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --experiment-id "a${AGENT_ID}/0" \
   --parent-id "-" \
@@ -151,20 +149,23 @@ Minimum required profile for each experiment:
 
 ```bash
 scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
 ```
 
 This runs `ncu --set full --target-processes all` and writes:
 
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.ncu-rep`
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
+- `results/experiments/a{AGENT_ID}_{n}/ncu/details.txt`
 
-The normal `validate.py` pass is still the source of `candidate_us`,
-`reference_us`, correctness, and VRAM. By default the NCU helper does not run
-the full validation timing loop; it runs `scripts/profile_candidate_once.py`,
-warms up the candidate, then profiles one candidate invocation using CUDA
-profiler start/stop markers. The NCU pass is for evidence: speed of light
-analysis, achieved SM/memory throughput, occupancy, launch/runtime behavior,
-instruction mix, memory traffic, and dominant stall reasons.
+The normal `validate.py` pass is still the source of `reference_us`,
+correctness, and VRAM. The official candidate timing stored in
+`results/experiments.tsv` is `ncu_duration_us`: the sum of Nsight Compute
+kernel `Duration us` rows in `ncu/details.txt`. The number of summed rows is
+stored as `ncu_kernel_count`. By default the NCU helper does not run the full
+validation timing loop; it runs
+`scripts/profile_candidate_once.py`, warms up the candidate, then profiles one
+candidate invocation using CUDA profiler start/stop markers.
 
 Before the first optimization pass for a task, read NVIDIA's official Nsight
 Compute documentation and Kernel Profiling Guide. Use them as the interpretation
@@ -308,7 +309,7 @@ git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"  # stages a
 
 ```bash
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "candidate_us\|reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
+grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 ```
 
 If grep is empty, the run crashed. Read `tail -n 50 "$EXPERIMENT_DIR/run.log"` for the traceback. If it is a trivial fix (typo, import), fix and re-run. Otherwise log as crash and move on.
@@ -329,7 +330,7 @@ the experiment is not fully usable for design decisions until NCU succeeds.
 ### 8. Compute Speedup And Status
 
 ```
-speedup = reference_us / candidate_us
+speedup = reference_us / ncu_duration_us
 ```
 
 Decide `status` before recording the row:
@@ -351,9 +352,9 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --run-log "$EXPERIMENT_DIR/run.log"
 ```
 
-Use this script for every result, including crashes and failed experiments. It parses the experiment `run.log`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, and do not use `echo >>` for experiment rows.
+Use this script for every result, including crashes and failed experiments. It parses the experiment `run.log`, reads `ncu/details.txt`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, and do not use `echo >>` for experiment rows.
 For `status=crash`, the script still appends a row if the run log is missing
-some or all metrics; missing timing/VRAM values are recorded as `nan` and
+some or all metrics; missing NCU duration/VRAM values are recorded as `nan` and
 missing correctness is recorded as `CRASH`.
 
 ### 10. Write Detailed Note
@@ -426,12 +427,12 @@ Concrete next experiments suggested by this result, or what not to try again.
 Columns (tab-separated):
 
 ```
-experiment_id  parent_id  agent_id  commit  timestamp  candidate_us  reference_us  speedup  correctness  peak_vram_mb  status  description
+experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kernel_count  reference_us  speedup  correctness  peak_vram_mb  status  description
 ```
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
 `reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments.
-The reported `candidate_us` and calibrated `reference_us` both correspond to the single stress benchmark case from `validate.make_stress_inputs()`. Correctness-only cases are broader coverage and do not affect the reported timing case.
+The reported `ncu_duration_us` corresponds to the profiled candidate invocation from `validate.make_stress_inputs()`. `ncu_kernel_count` is the number of NCU kernel Duration rows summed for that invocation. Correctness-only cases are broader coverage and do not affect the reported timing case.
 
 ### 11. Keep or discard
 

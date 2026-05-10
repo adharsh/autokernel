@@ -2,7 +2,7 @@
 AutoKernel -- Analysis & visualization of experiment results.
 
 Reads results/experiments.tsv (multi-agent kernel optimization log), produces:
-  - progress.html  : interactive scatter of candidate latency over experiments
+  - progress.html  : interactive scatter of NCU kernel duration over experiments
   - speedup.html   : interactive scatter of speedup over experiments
   - report.md      : markdown session report
   - terminal output: summary statistics + delta ranking
@@ -51,7 +51,14 @@ def load_results(path: str = "results/experiments.tsv") -> pd.DataFrame | None:
     if len(df) == 0:
         return None
     df.columns = [c.strip().lower() for c in df.columns]
-    for col in ("candidate_us", "reference_us", "speedup", "peak_vram_mb", "agent_id"):
+    for col in (
+        "ncu_duration_us",
+        "ncu_kernel_count",
+        "reference_us",
+        "speedup",
+        "peak_vram_mb",
+        "agent_id",
+    ):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     if "timestamp" in df.columns:
@@ -95,7 +102,7 @@ def _agent_symbol(agent_id) -> str:
 
 
 def _ref_and_best(df, cats):
-    """Extract best kept candidate_us and best per-row speedup."""
+    """Extract best kept ncu_duration_us and best per-row speedup."""
     ref_us = None
     if "reference_us" in df.columns:
         vals = df["reference_us"].dropna()
@@ -104,8 +111,8 @@ def _ref_and_best(df, cats):
     best_us = None
     best_speedup = None
     kept = df[cats == "keep"]
-    if "candidate_us" in kept.columns:
-        v = kept["candidate_us"].dropna()
+    if "ncu_duration_us" in kept.columns:
+        v = kept["ncu_duration_us"].dropna()
         if len(v) > 0:
             best_us = float(v.min())
     if "speedup" in kept.columns:
@@ -133,7 +140,8 @@ def profiling_coverage(df: pd.DataFrame) -> dict:
         experiment_dir = EXPERIMENTS_DIR / safe_id
         ncu_report = experiment_dir / "ncu" / "profile.ncu-rep"
         ncu_log = experiment_dir / "ncu" / "profile.log"
-        if not ncu_report.exists() and not ncu_log.exists():
+        ncu_details = experiment_dir / "ncu" / "details.txt"
+        if not ncu_report.exists() or not ncu_log.exists() or not ncu_details.exists():
             missing_ncu.append(str(eid))
 
         note_path = experiment_dir / "note.md"
@@ -159,7 +167,8 @@ def _hover_text(row) -> str:
     parts = []
     for col, label in [("experiment_id", "Branch"),
                        ("description", "Description"),
-                       ("candidate_us", "Latency"),
+                       ("ncu_duration_us", "NCU Duration"),
+                       ("ncu_kernel_count", "NCU Kernels"),
                        ("speedup", "Speedup"),
                        ("correctness", "Correctness"),
                        ("status", "Status"),
@@ -170,15 +179,23 @@ def _hover_text(row) -> str:
         val = row.get(col)
         if pd.isna(val):
             continue
-        if col == "candidate_us":
+        if col == "ncu_duration_us":
             parts.append(f"<b>{label}:</b> {float(val):.2f} us")
         elif col == "speedup":
             parts.append(f"<b>{label}:</b> {float(val):.3f}x")
+        elif col == "ncu_kernel_count":
+            parts.append(f"<b>{label}:</b> {int(val)}")
         elif col == "peak_vram_mb" and float(val) > 0:
             parts.append(f"<b>{label}:</b> {float(val):.0f}")
         elif col == "agent_id":
             parts.append(f"<b>{label}:</b> a{int(val)}")
-        elif col not in ("candidate_us", "speedup", "peak_vram_mb", "agent_id"):
+        elif col not in (
+            "ncu_duration_us",
+            "ncu_kernel_count",
+            "speedup",
+            "peak_vram_mb",
+            "agent_id",
+        ):
             parts.append(f"<b>{label}:</b> {val}")
     return "<br>".join(parts)
 
@@ -211,9 +228,9 @@ def _add_scatter_traces(fig, df, ycol):
 # ---------------------------------------------------------------------------
 
 def make_progress_plot(df: pd.DataFrame) -> None:
-    """Interactive scatter of candidate_us over experiments."""
-    if "candidate_us" not in df.columns:
-        print("WARNING: candidate_us column missing -- skipping progress plot.")
+    """Interactive scatter of ncu_duration_us over experiments."""
+    if "ncu_duration_us" not in df.columns:
+        print("WARNING: ncu_duration_us column missing -- skipping progress plot.")
         return
     df = df.copy()
     df["_cat"] = df.apply(classify_row, axis=1)
@@ -221,12 +238,12 @@ def make_progress_plot(df: pd.DataFrame) -> None:
     df["_hover"] = df.apply(_hover_text, axis=1)
 
     fig = go.Figure()
-    _add_scatter_traces(fig, df, "candidate_us")
+    _add_scatter_traces(fig, df, "ncu_duration_us")
 
     # Running-best frontier
-    valid = df[(df["_cat"] == "keep") & df["candidate_us"].notna()]
+    valid = df[(df["_cat"] == "keep") & df["ncu_duration_us"].notna()]
     if len(valid):
-        frontier = valid["candidate_us"].cummin()
+        frontier = valid["ncu_duration_us"].cummin()
         fig.add_trace(go.Scatter(
             x=valid["_n"], y=frontier, mode="lines",
             line=dict(color=COLOR_FRONTIER, width=2, shape="hv"),
@@ -245,7 +262,7 @@ def make_progress_plot(df: pd.DataFrame) -> None:
     fig.update_layout(
         title=f"AutoKernel -- Optimization Progress: {nt} experiments, {nk} kept",
         xaxis_title="Experiment #",
-        yaxis_title="Candidate Latency (us) -- lower is better",
+        yaxis_title="NCU Kernel Duration (us) -- lower is better",
         hovermode="closest",
         template="plotly_white",
         height=600, width=1100,
@@ -371,7 +388,7 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
     if ref_us:
         print(f"\n  Reference latency:     {ref_us:.2f} us")
     if best_us:
-        print(f"  Best candidate:        {best_us:.2f} us")
+        print(f"  Best NCU duration:     {best_us:.2f} us")
     if best_speedup:
         print(f"  Best speedup:          {best_speedup:.2f}x")
     kp = (n_keep / n_total * 100) if n_total else 0
@@ -386,12 +403,12 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
 
     # Top 5
     kept_df = df[cats == "keep"]
-    if "candidate_us" in df.columns and n_keep > 0:
-        top5 = kept_df.dropna(subset=["candidate_us"]).sort_values("candidate_us").head(5)
+    if "ncu_duration_us" in df.columns and n_keep > 0:
+        top5 = kept_df.dropna(subset=["ncu_duration_us"]).sort_values("ncu_duration_us").head(5)
         if len(top5):
             print("\n  Top 5 improvements:")
             for rank, (_, r) in enumerate(top5.iterrows(), 1):
-                c = float(r["candidate_us"])
+                c = float(r["ncu_duration_us"])
                 s = f"{float(r['speedup']):.2f}x" if pd.notna(r.get("speedup")) else "N/A"
                 print(f"    {rank}. {c:.2f} us ({s}) -- {r.get('description','')}")
 
@@ -406,8 +423,8 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
                 at, ak = len(ad), int((ac == "keep").sum())
                 ab = None
                 akd = ad[ac == "keep"]
-                if "candidate_us" in akd.columns:
-                    v = akd["candidate_us"].dropna()
+                if "ncu_duration_us" in akd.columns:
+                    v = akd["ncu_duration_us"].dropna()
                     if len(v):
                         ab = float(v.min())
                 agent_spd = None
@@ -427,16 +444,16 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
 
 def print_delta_ranking(df: pd.DataFrame) -> None:
     """Each kept experiment's incremental improvement, sorted largest first."""
-    if "candidate_us" not in df.columns:
+    if "ncu_duration_us" not in df.columns:
         return
     cats = df.apply(classify_row, axis=1)
-    kept = df[cats == "keep"].dropna(subset=["candidate_us"]).reset_index(drop=True)
+    kept = df[cats == "keep"].dropna(subset=["ncu_duration_us"]).reset_index(drop=True)
     if len(kept) < 2:
         return
     deltas: list[tuple[float, float, str]] = []
-    best = float(kept.iloc[0]["candidate_us"])
+    best = float(kept.iloc[0]["ncu_duration_us"])
     for i in range(1, len(kept)):
-        cand = float(kept.iloc[i]["candidate_us"])
+        cand = float(kept.iloc[i]["ncu_duration_us"])
         delta = best - cand
         if delta > 0:
             deltas.append((delta, cand, str(kept.iloc[i].get("description", "")).strip()))
@@ -445,7 +462,7 @@ def print_delta_ranking(df: pd.DataFrame) -> None:
         return
     deltas.sort(key=lambda x: x[0], reverse=True)
     print("Delta Ranking (incremental improvement per kept experiment)")
-    print(f"{'Rank':>4}  {'Delta (us)':>10}  {'Latency':>10}  Description")
+    print(f"{'Rank':>4}  {'Delta (us)':>10}  {'NCU Duration':>12}  Description")
     print("-" * 72)
     for rank, (d, lat, desc) in enumerate(deltas, 1):
         print(f"{rank:4d}  {-d:>+10.2f}  {lat:10.2f}  {desc}")
@@ -474,7 +491,7 @@ def generate_report(df: pd.DataFrame) -> None:
     if ref_us:
         L.append(f"| Reference latency | {ref_us:.2f} us |")
     if best_us:
-        L.append(f"| Best candidate latency | {best_us:.2f} us |")
+        L.append(f"| Best NCU kernel duration | {best_us:.2f} us |")
     if best_speedup:
         L.append(f"| Best speedup | {best_speedup:.2f}x |")
     L.append("")
@@ -505,10 +522,10 @@ def generate_report(df: pd.DataFrame) -> None:
         L.append("")
 
     kept_df = df[cats == "keep"]
-    if len(kept_df) and "candidate_us" in kept_df.columns:
+    if len(kept_df) and "ncu_duration_us" in kept_df.columns:
         L += ["## Key Discoveries (Kept)", ""]
-        for _, r in kept_df.sort_values("candidate_us").iterrows():
-            c = f"{float(r['candidate_us']):.2f} us" if pd.notna(r.get("candidate_us")) else "N/A"
+        for _, r in kept_df.sort_values("ncu_duration_us").iterrows():
+            c = f"{float(r['ncu_duration_us']):.2f} us" if pd.notna(r.get("ncu_duration_us")) else "N/A"
             s = f"{float(r['speedup']):.2f}x" if pd.notna(r.get("speedup")) else "N/A"
             L.append(f"- **{r.get('experiment_id','?')}**: {c} (speedup: {s}) -- "
                       f"{r.get('description','')}")

@@ -5,8 +5,9 @@ Copy this file to the repository root as `reference.py`, then replace
 
 Optimization agents must not edit the root `reference.py`.
 `validate.py` will call this implementation for every correctness case, while
-`scripts/calibrate_reference.py` times it once on the single stress benchmark
-case and stores that calibrated timing under `results/reference_timing.json`.
+`scripts/calibrate_reference.py` profiles it once with Nsight Compute on the
+single stress benchmark case and stores that calibrated timing under
+`results/reference_timing.json`.
 """
 
 

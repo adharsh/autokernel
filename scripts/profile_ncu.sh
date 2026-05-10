@@ -8,9 +8,8 @@ set -euo pipefail
 #   scripts/profile_ncu.sh a0/1 uv run python validate.py
 #
 # Reports are written under results/experiments/<experiment_id>/ncu/ with slashes
-# normalized to underscores. The raw validate.py timing pass remains the source
-# for candidate_us; this profile pass is for design evidence and speed-of-light
-# analysis.
+# normalized to underscores. The NCU kernel Duration rows are the source for
+# ncu_duration_us and ncu_kernel_count in results/experiments.tsv.
 
 usage() {
   cat <<'EOF'
@@ -54,6 +53,7 @@ EXPERIMENT_DIR="$EXPERIMENTS_DIR/$SAFE_ID"
 NCU_DIR="$EXPERIMENT_DIR/ncu"
 REPORT_BASENAME="$NCU_DIR/profile"
 LOG_PATH="$NCU_DIR/profile.log"
+DETAILS_PATH="$NCU_DIR/details.txt"
 PROFILE_FROM_START=${AUTOKERNEL_NCU_PROFILE_FROM_START:-}
 
 if [ "$#" -eq 0 ]; then
@@ -66,6 +66,7 @@ mkdir -p "$NCU_DIR"
 echo "experiment_dir=$EXPERIMENT_DIR"
 echo "ncu_report=${REPORT_BASENAME}.ncu-rep"
 echo "ncu_log=$LOG_PATH"
+echo "ncu_details=$DETAILS_PATH"
 
 NCU_ARGS=(
   --set full
@@ -83,3 +84,5 @@ ncu \
   "${NCU_ARGS[@]}" \
   "$@" \
   > "$LOG_PATH" 2>&1
+
+ncu --import "${REPORT_BASENAME}.ncu-rep" --page details > "$DETAILS_PATH"

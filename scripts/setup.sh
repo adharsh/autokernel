@@ -19,7 +19,7 @@ TEMPLATE_DIR="$ROOT/docs/templates"
 RESULTS_DIR="$ROOT/results"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 TSV="$RESULTS_DIR/experiments.tsv"
-TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description'
+TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	description'
 CODEX_HOME=${CODEX_HOME:-"$HOME/.codex"}
 
 DO_SYNC=0

@@ -26,12 +26,7 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for Nsight Compute profiling.")
 
-    warmup = int(
-        os.environ.get(
-            "AUTOKERNEL_NCU_WARMUP",
-            int(getattr(validate, "CANDIDATE_WARMUP", 20)),
-        )
-    )
+    warmup = int(os.environ.get("AUTOKERNEL_NCU_WARMUP", "20"))
 
     torch.cuda.reset_peak_memory_stats()
 

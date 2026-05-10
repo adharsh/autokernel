@@ -1,19 +1,18 @@
-"""Task-specific validation and timing harness template.
+"""Task-specific validation harness template.
 
 Copy this file to the repository root as `validate.py`, then fill in the TODOs.
 Agents parse the printed keys below, so keep these labels stable:
 
-candidate_us
 reference_us
 correctness
 peak_vram_mb
 
 Design contract:
 - Define exactly one stress benchmark case. It is the only case used for
-  calibrated reference timing and candidate timing.
+  calibrated reference timing and NCU candidate profiling.
 - Expose that stress case through `make_stress_inputs()`.
 - Define separate correctness-only cases for edge coverage. These cases compare
-  candidate outputs to reference outputs but do not affect reported timing.
+  candidate outputs to reference outputs but do not affect NCU profiling.
 - `reference_us` is loaded from `results/reference_timing.json`, produced by
   `uv run python scripts/calibrate_reference.py`.
 """
@@ -31,22 +30,11 @@ from typing import Any
 import torch
 
 from candidate.interface import kernel_fn as candidate_kernel_fn
-from profile_utils import cpu_timer, cuda_timer
 from reference import kernel_fn as reference_kernel_fn
 
 
 RTOL = 1e-2
 ATOL = 1e-2
-DEFAULT_CANDIDATE_WARMUP = 20
-DEFAULT_CANDIDATE_ITERS = 200
-
-CANDIDATE_WARMUP = int(
-    os.environ.get("AUTOKERNEL_CANDIDATE_WARMUP", DEFAULT_CANDIDATE_WARMUP)
-)
-CANDIDATE_ITERS = int(
-    os.environ.get("AUTOKERNEL_CANDIDATE_ITERS", DEFAULT_CANDIDATE_ITERS)
-)
-
 ROOT = Path(__file__).resolve().parent
 DEFAULT_REFERENCE_TIMING_PATH = ROOT / "results" / "reference_timing.json"
 
@@ -124,21 +112,6 @@ def peak_vram_mb() -> float:
     return torch.cuda.max_memory_allocated() / 1024**2
 
 
-def time_us(
-    fn,
-    *,
-    warmup: int = CANDIDATE_WARMUP,
-    iters: int = CANDIDATE_ITERS,
-) -> float:
-    """Return median runtime in microseconds, or NaN if timing fails."""
-    try:
-        timer = cuda_timer if torch.cuda.is_available() else cpu_timer
-        return timer(fn, warmup=warmup, iters=iters)["median_ms"] * 1000.0
-    except Exception:
-        traceback.print_exc()
-        return math.nan
-
-
 def reference_timing_path() -> Path:
     override = os.environ.get("AUTOKERNEL_REFERENCE_TIMING_PATH")
     if override:
@@ -178,6 +151,13 @@ def calibrated_reference_us() -> float:
             f"stress case {STRESS_BENCHMARK_CASE.name!r}."
         )
 
+    timing_source = payload.get("timing_source")
+    if timing_source != "ncu_duration_us":
+        raise RuntimeError(
+            f"Reference timing source was {timing_source!r}, expected "
+            "'ncu_duration_us'. Re-run `uv run python scripts/calibrate_reference.py`."
+        )
+
     return float(payload["reference_us"])
 
 
@@ -206,15 +186,12 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()
 
     correctness = check_correctness()
-    bench_args = make_stress_inputs()
     with torch.no_grad():
         reference_us = calibrated_reference_us()
-        candidate_us = time_us(lambda: candidate_kernel_fn(*bench_args))
 
-    if correctness == "PASS" and (math.isnan(reference_us) or math.isnan(candidate_us)):
+    if correctness == "PASS" and math.isnan(reference_us):
         correctness = "CRASH"
 
-    print(f"candidate_us: {candidate_us:.3f}")
     print(f"reference_us: {reference_us:.3f}")
     print(f"correctness: {correctness}")
     print(f"peak_vram_mb: {peak_vram_mb():.1f}")

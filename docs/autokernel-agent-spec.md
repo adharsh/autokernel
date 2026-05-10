@@ -16,23 +16,25 @@ autokernel/
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
 ├── results/
 │   ├── experiments.tsv      # Shared, append-only experiment log (tab-separated)
-│   ├── reference_timing.json # Calibrated reference timing for the stress case
+│   ├── reference_timing.json # Calibrated NCU reference timing for the stress case
 │   └── experiments/         # One artifact folder per experiment
 │       └── a0_1/
 │           ├── note.md
 │           ├── run.log
 │           ├── ncu/
 │           │   ├── profile.ncu-rep
-│           │   └── profile.log
+│           │   ├── profile.log
+│           │   └── details.txt
 │           ├── nsys/
 │           ├── microbench/
 │           └── codegen/
 ├── analysis.py              # Plotting + reports from results/experiments.tsv
-├── profile_utils.py         # cuda_timer, cpu_timer, shared profiling utilities
+├── profile_utils.py         # NCU duration parser and shared TSV utilities
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
     ├── calibrate_reference.py # One-time reference timing calibration
     ├── profile_candidate_once.py # Single warmed-up candidate profile target
+    ├── profile_reference_once.py # Single warmed-up reference profile target
     ├── profile_ncu.sh        # Required per-experiment Nsight Compute profiling
     ├── record_result.py      # File-locked experiment row appender
     └── setup.sh             # Local setup helper
@@ -57,9 +59,9 @@ autokernel/
 
 - It defines exactly one stress benchmark case. This is the performance target.
 - `validate.make_stress_inputs()` exposes that exact timing case.
-- `scripts/calibrate_reference.py` times `reference.kernel_fn` on that stress case once and writes `results/reference_timing.json`.
-- Every `validate.py` run times `candidate.kernel_fn` on that same stress case and prints the calibrated `reference_us`.
-- Correctness-only cases broaden behavioral coverage but do not change the reported `candidate_us` or `reference_us` timing case.
+- `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with NCU and writes `results/reference_timing.json`.
+- Every `validate.py` run prints the calibrated NCU-based `reference_us`; candidate timing comes from `scripts/profile_ncu.sh`.
+- Correctness-only cases broaden behavioral coverage but do not change the profiled `ncu_duration_us` timing case.
 
 ---
 
@@ -69,7 +71,7 @@ autokernel/
 
 **Header**:
 ```
-experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	speedup	correctness	peak_vram_mb	status	description
+experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	description
 ```
 
 **Column definitions**:
@@ -81,9 +83,10 @@ experiment_id	parent_id	agent_id	commit	timestamp	candidate_us	reference_us	spee
 | `agent_id` | int | `0` | Which agent ran this |
 | `commit` | string | `a1b2c3d` | 7-char git commit hash |
 | `timestamp` | ISO8601 | `2026-03-20T14:32:00` | When the experiment completed |
-| `candidate_us` | float | `42.3` | Candidate kernel latency in microseconds |
+| `ncu_duration_us` | float | `42.3` | Sum of Nsight Compute kernel `Duration us` rows in microseconds |
+| `ncu_kernel_count` | int | `1` | Number of NCU kernel `Duration` rows summed for the profiled invocation |
 | `reference_us` | float | `85.1` | Calibrated reference latency in microseconds for the single stress benchmark case |
-| `speedup` | float | `2.01` | `reference_us / candidate_us` |
+| `speedup` | float | `2.01` | `reference_us / ncu_duration_us` |
 | `correctness` | string | `PASS` | `PASS`, `FAIL`, or `CRASH` |
 | `peak_vram_mb` | float | `2048.5` | Peak GPU memory used during benchmark |
 | `status` | string | `keep` | `keep`, `discard`, or `crash` |
@@ -120,7 +123,8 @@ results/experiments/a{agent_id}_{n}/
 ├── run.log
 ├── ncu/
 │   ├── profile.ncu-rep
-│   └── profile.log
+│   ├── profile.log
+│   └── details.txt
 ├── nsys/
 ├── microbench/
 └── codegen/
@@ -278,9 +282,11 @@ and stores:
 
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.ncu-rep`
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
+- `results/experiments/a{AGENT_ID}_{n}/ncu/details.txt`
 
-The raw `validate.py` pass remains the source of timing/correctness values for
-`results/experiments.tsv`; NCU is used to explain why the timing happened. With
+The raw `validate.py` pass remains the source of correctness, `reference_us`,
+and VRAM values for `results/experiments.tsv`; NCU `Duration us` is the source
+of `ncu_duration_us`. With
 the default command, `scripts/profile_ncu.sh` profiles
 `scripts/profile_candidate_once.py`, which calls `validate.make_stress_inputs()`,
 warms up the candidate, starts CUDA profiling, runs one candidate invocation,
@@ -316,7 +322,10 @@ evidence makes codegen the active question.
 ## 7. Microbench Agent
 
 ### Purpose
-A dedicated agent that writes and runs line-by-line microbenchmarks of the current candidate code, following the xllm benchmarking pattern. It answers: "what percentage of time is spent on each compute line?"
+A dedicated agent that writes and runs small Nsight Compute profiling targets
+for the current candidate code. It answers narrow follow-up questions such as
+"which kernel launch in this path is taking time?" or "what limiter changed
+after this implementation change?"
 
 This workflow is exposed as a Claude Code agent and as a Codex skill. It needs enough context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
 
@@ -326,141 +335,39 @@ required Nsight Compute profile for an experiment.
 ### Workflow
 1. **Read the candidate code** — `candidate/interface.py`
 2. **Identify every compute line** — map each line to a logical sub-operation
-3. **Write per-line microbenchmarks** — isolate each sub-op with `cuda_timer` or `cpu_timer`
-4. **Run benchmarks** — execute with sufficient warmup and iterations
+3. **Write focused NCU targets** — isolate one candidate path or sub-operation
+4. **Run profiles** — execute through `ncu` and import the details page
 5. **Return structured report** — sub-op breakdown table
 
 ### Key principles
-- Every compute line in real code gets an isolated microbenchmark
+- Every focused question gets an isolated profiling target
 - Separate CUDA kernel calls are profiled separately
-- For async stream operations, benchmark on large enough inputs to be measurable
-- Each sub-op benchmark must have a comment indicating the source line it measures (e.g., `# bench: interface.py:42`)
+- If a callable launches multiple kernels, report each kernel duration and the sum
+- Each profiling target must identify the source path or line it measures
 
 ### Tools available to the microbench agent
-- `cuda_timer` / `cpu_timer` (see below)
+- `ncu`, `scripts/profile_ncu.sh`, and `profile_utils.ncu_duration_rows_us`
 - Read/Write/Bash for code generation and execution
 
-**Note**: `ncu` and `nsys` are available to the main optimization agent directly, not the microbench agent. The microbench agent only does microbenchmarking, and its output is interpreted alongside the required NCU report.
+**Note**: the microbench workflow complements the required NCU report. It does
+not replace the official per-experiment profile.
 
 ### Output format
 ```
 Sub-op Breakdown for candidate/interface.py
 ============================================
-Sub-op              Line    Latency (ms)    % of Total    Timer
+Sub-op              Line    Duration (us)   % of Total    Limiter
 ------------------------------------------------------------------
-matmul_qkv          42      0.312           38.2%         cuda
-softmax             55      0.185           22.6%         cuda
-attention_score     60      0.142           17.4%         cuda
-norm                38      0.098           12.0%         cpu+gpu
-index_select        35      0.052            6.4%         cuda
-python_overhead     30      0.028            3.4%         cpu
+matmul_qkv          42      312.0           38.2%         tensor pipe
+softmax             55      185.0           22.6%         memory dependency
+attention_score     60      142.0           17.4%         scheduler
+norm                38       98.0           12.0%         memory bandwidth
+index_select        35       52.0            6.4%         uncoalesced load
 ------------------------------------------------------------------
-TOTAL                       0.817           100.0%
+TOTAL                       789.0           100.0%
 
 Bottleneck: matmul_qkv (38.2%)
 ```
-
-### Reference: xllm benchmarking patterns
-
-The microbench agent follows the patterns established in `xllm/benchmarks/`. Key files to study:
-
-**`xllm/benchmarks/utils.py`** — Timer utilities:
-- `cuda_timer(fn, *args, warmup=10, iters=100)` — CUDA event-based GPU timing
-- input tensor factories for benchmark cases
-- formatted output helpers for comparing benchmark cases
-- `save_results(all_results, path)` — JSON/CSV export
-
-**`xllm/benchmarks/bench_router.py`** — Best example of line-by-line profiling:
-- Profiles `TopKRouter.forward()` (router.py:64-87)
-- 9 sub-ops: projection, cast_to_f32, score_func, bias_add, topk, gather, score_norm, cast_to_bf16, bincount
-- Each sub-op is isolated and timed independently
-
-**`xllm/benchmarks/bench_mgmm.py`** — SwiGLU sub-op profiling:
-- Sub-ops: mgmm_w1, silu, mgmm_w3, elementwise_mul, mgmm_w2, full
-
-**`xllm/benchmarks/bench_x_permutation.py`** — Simple 3 sub-op example:
-- Sub-ops: argsort, div, index_select
-
-**`xllm/docs/benchmarking_workflow.md`** — The 6-step workflow this agent follows.
-
-### Timer utilities (`profile_utils.py`)
-
-#### cuda_timer
-For GPU-bound operations. Uses CUDA events for accurate kernel timing:
-```python
-def cuda_timer(fn, *args, warmup=10, iters=100, **kwargs) -> dict:
-    """
-    Time a GPU operation using CUDA events.
-    Returns: {median_ms, mean_ms, min_ms, max_ms, std_ms}
-    """
-    import torch
-
-    for _ in range(warmup):
-        fn(*args, **kwargs)
-    torch.cuda.synchronize()
-
-    timings = []
-    for _ in range(iters):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        fn(*args, **kwargs)
-        end.record()
-        torch.cuda.synchronize()
-        timings.append(start.elapsed_time(end))  # ms
-
-    import statistics
-    return {
-        "median_ms": statistics.median(timings),
-        "mean_ms": statistics.mean(timings),
-        "min_ms": min(timings),
-        "max_ms": max(timings),
-        "std_ms": statistics.stdev(timings) if len(timings) > 1 else 0.0,
-    }
-```
-
-#### cpu_timer
-For CPU-bound or mixed CPU+GPU operations:
-```python
-def cpu_timer(fn, *args, warmup=10, iters=100, sync_cuda=True, **kwargs) -> dict:
-    """
-    Time an operation using CPU wall clock.
-    sync_cuda=True (default): includes GPU kernel completion time.
-    sync_cuda=False: pure CPU operations only.
-    Returns: {median_ms, mean_ms, min_ms, max_ms, std_ms}
-    """
-    import time
-    import torch
-
-    for _ in range(warmup):
-        fn(*args, **kwargs)
-    if sync_cuda and torch.cuda.is_available():
-        torch.cuda.synchronize()
-
-    timings = []
-    for _ in range(iters):
-        if sync_cuda and torch.cuda.is_available():
-            torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        fn(*args, **kwargs)
-        if sync_cuda and torch.cuda.is_available():
-            torch.cuda.synchronize()
-        timings.append((time.perf_counter() - t0) * 1000)  # ms
-
-    import statistics
-    return {
-        "median_ms": statistics.median(timings),
-        "mean_ms": statistics.mean(timings),
-        "min_ms": min(timings),
-        "max_ms": max(timings),
-        "std_ms": statistics.stdev(timings) if len(timings) > 1 else 0.0,
-    }
-```
-
-#### When to use which
-- **cuda_timer**: Isolate *just* GPU kernel execution time, excluding CPU overhead and launch latency
-- **cpu_timer(sync_cuda=True)**: Total wall-clock time including both CPU and GPU work (the safe default)
-- **cpu_timer(sync_cuda=False)**: Pure CPU operations with no GPU involvement
 
 ---
 
@@ -476,9 +383,9 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 3. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
 4. Edit candidate/interface.py
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
-6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract candidate_us, calibrated reference_us, correctness, peak_vram_mb
+6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract calibrated reference_us, correctness, peak_vram_mb
 7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}"
-8. Compute speedup = reference_us / candidate_us and decide status
+8. Compute speedup = reference_us / ncu_duration_us and decide status
 9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
 10. Write results/experiments/a{id}_{n}/note.md with NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
 11. If correctness == PASS and speedup > previous best:
@@ -528,7 +435,7 @@ Use whichever backend (PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTL
 3. `report.md` — markdown session report (optional)
 
 ### Main plot: Latency over experiments
-- **Y-axis**: `candidate_us` (latency in microseconds, lower is better)
+- **Y-axis**: `ncu_duration_us` (NCU kernel duration in microseconds, lower is better)
 - **X-axis**: Experiment number (global ordering by timestamp)
 - **Dot colors by status**:
   - Green (`#2ecc71`): keep
@@ -668,7 +575,7 @@ def read_results(csv_path: str) -> list[dict]:
 ```bash
 # Initialize results/experiments.tsv with header and create artifact root
 mkdir -p results/experiments
-printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tcandidate_us\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
+printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work
 uv run python scripts/calibrate_reference.py
@@ -690,7 +597,7 @@ cd $WORKTREE_PATH
 # Baseline branch a{AGENT_ID}/0 was created by the launcher.
 
 # Run baseline. reference_us is the calibrated constant for the stress case.
-uv run python validate.py → extract reference_us, candidate_us
+uv run python validate.py → extract reference_us, correctness, peak_vram_mb
 scripts/profile_ncu.sh "a${AGENT_ID}/0" → write required baseline NCU report
 
 # Record baseline
@@ -725,9 +632,9 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="basel
 | # | Component | File(s) | Description |
 |---|-----------|---------|-------------|
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
-| 2 | `profile_utils.py` | `profile_utils.py` | `cuda_timer`, `cpu_timer`, `append_result`, `read_results` utilities |
+| 2 | `profile_utils.py` | `profile_utils.py` | NCU duration parsing, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py` | Standard extensive Nsight Compute profile for every baseline and experiment |
+| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Standard extensive Nsight Compute profile for every baseline, experiment, and reference calibration |
 | 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
 | 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
 | 7 | Results TSV init | Part of setup | Header row creation + baseline recording |
