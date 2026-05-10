@@ -126,6 +126,36 @@ backend is the right response. If NCU shows compiler/codegen, instruction
 selection, occupancy, memory coalescing, memory layout, synchronization, or
 scheduling limits that require lower-level control, move lower in the stack.
 
+### Architecture-Specific Optimization
+
+Optimize for the actual hardware being used, not just generic CUDA. Record the
+GPU name and compute capability when relevant.
+
+Think from first principles about how the algorithm should map to this
+architecture: data layout, data movement, tiling, thread/warp/CTA ownership,
+memory hierarchy, execution units, register/shared-memory pressure, occupancy,
+synchronization, and launch/runtime overhead. It is acceptable, and often
+necessary, to change the algorithm or data organization to fit the platform.
+
+When profiling identifies a limiter, actively ask whether this GPU offers a
+better dataflow, primitive, instruction family, memory path, launch mode, or
+synchronization mechanism for that limiter. Examples include Hopper WGMMA, TMA,
+mbarrier, setmaxnreg, CTA clusters, and architecture-specific tensor/memory/
+scheduling/synchronization features on newer GPUs such as Blackwell. These are
+search-space hints, not a checklist.
+
+If you use hardware-specific CUDA/PTX, explain why it fits the profile, guard it
+by architecture when needed, and preserve a correct fallback.
+
+### External Research
+
+Use internet access when it can improve the experiment: official architecture
+documentation, CUDA/PTX guides, relevant arXiv papers, vendor blog posts, or
+known algorithms for the measured bottleneck. Prefer official documentation for
+architecture semantics. When external research affects a design, cite the URL or
+paper in the note and explain the concrete implementation idea it motivates. Do
+not add bibliography-style citations for sources that did not change the design.
+
 PTX/SASS inspection is profile-triggered, not mandatory for every experiment.
 Inspect generated PTX, cubin, or SASS when NCU suggests a codegen or
 instruction-level limiter: unexpected instruction mix, missing tensor cores,
@@ -264,9 +294,16 @@ latency floor you infer. Call out whether the gap is compute, memory bandwidth,
 latency/occupancy, launch overhead, or framework overhead limited.
 
 ## Design Decision From Profile
-What the NCU evidence says to try next, including whether to stay in the current
-backend or move lower level: PyTorch, Triton, CUDA C++, CUDA C++ with inline
-PTX, CUTLASS, CUTE DSL, or PTX.
+State what the NCU evidence says is limiting performance, what experiment should
+be tried next, and whether that means staying in the current backend or moving
+lower level: PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE
+DSL, or PTX.
+
+When relevant, connect the decision to the actual GPU architecture: data layout,
+memory movement, tensor/memory instructions, synchronization, launch overhead,
+or other hardware-specific features. If external documentation or papers changed
+the design, cite the URL or paper title & arXiv ID and state the concrete
+implementation idea it supports.
 
 ## Codegen/PTX/SASS
 State whether PTX/SASS/cubin was inspected. If yes, list artifact paths and the
