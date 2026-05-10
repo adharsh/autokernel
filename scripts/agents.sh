@@ -227,7 +227,7 @@ _launch_agent() {
           --output-format stream-json \
           --verbose \
           --allowedTools "${CLAUDE_ALLOWED_TOOLS[@]}" \
-          --permission-mode bypassPermissions \
+          --dangerously-skip-permissions \
           "$prompt" \
           >> "$log" 2>&1 &
       _agent_pid=$!
