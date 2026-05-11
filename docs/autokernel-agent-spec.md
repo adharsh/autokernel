@@ -48,7 +48,7 @@ autokernel/
 | `reference.py` | Human / deliberate agent reformulation | Normally fixed ground truth. May change only together with `validate.py` for the same input/interface reformulation |
 | `candidate/interface.py` | Agent | All optimization code lives here |
 | `candidate/__init__.py` | Agent | Exports from interface.py |
-| `results/experiments.tsv` | Agent (append-only) | Never delete, reorder, or alter experiment data. Use provided tooling for schema upgrades such as adding metadata columns |
+| `results/experiments.tsv` | Agent (append-only) | Must match the current TSV header for this run. Never delete, reorder, or alter experiment data during a run |
 | `results/experiments/*` | Agent/tool output | Per-experiment artifacts. Never delete or rewrite existing experiment folders |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |

@@ -33,7 +33,7 @@ Optional timing and metadata overrides:
 | `validate.py` | CONDITIONAL | Normally fixed. May be modified only for a deliberate fair input/interface reformulation that preserves the same mathematical workload. Commit the change with the experiment. |
 | `reference.py` | CONDITIONAL | Normally fixed ground truth. May be modified only to match the same deliberate input/interface reformulation as `validate.py`. Commit the change with the experiment. |
 | `candidate/` | YES | All your optimization code goes here. `interface.py` is the Python entry point that `validate.py` imports. You may create additional files (`.py`, `.cu`, `.cuh`, etc.) inside `candidate/`. |
-| `$AUTOKERNEL_EXPERIMENTS_TSV` | APPEND-ONLY | Never delete, reorder, or alter experiment data. Use the provided tooling for schema upgrades such as adding metadata columns. |
+| `$AUTOKERNEL_EXPERIMENTS_TSV` | APPEND-ONLY | Must match the current TSV header for this run. Never delete, reorder, or alter experiment data during a run. |
 | `$AUTOKERNEL_EXPERIMENTS_DIR` | APPEND-ONLY | Write detailed experiment artifacts. Never delete or rewrite existing experiment folders. |
 
 Do not commit `results/` to git. Leave it untracked.

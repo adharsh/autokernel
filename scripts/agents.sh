@@ -111,7 +111,15 @@ _detect_num_gpus() {
 
 _init_results_tsv() {
   mkdir -p "$RESULTS_DIR"
-  if [ ! -s "$TSV" ]; then
+  if [ -s "$TSV" ]; then
+    local header
+    header=$(head -n 1 "$TSV")
+    if [ "$header" != "$TSV_HEADER" ]; then
+      echo "results TSV header does not match this run: $TSV" >&2
+      echo "Move or remove the existing results directory before launching." >&2
+      exit 1
+    fi
+  else
     printf "%s\n" "$TSV_HEADER" > "$TSV"
   fi
 }

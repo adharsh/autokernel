@@ -48,9 +48,14 @@ def load_results(path: str = "results/experiments.tsv") -> pd.DataFrame | None:
     if not resolved.exists():
         return None
     df = pd.read_csv(resolved, sep="\t")
+    df.columns = [c.strip().lower() for c in df.columns]
+    if list(df.columns) != TSV_COLUMNS:
+        raise ValueError(
+            f"Unexpected TSV columns in {resolved}: {list(df.columns)!r}; "
+            f"expected {TSV_COLUMNS!r}"
+        )
     if len(df) == 0:
         return None
-    df.columns = [c.strip().lower() for c in df.columns]
     for col in (
         "ncu_duration_us",
         "ncu_kernel_count",

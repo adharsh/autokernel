@@ -36,10 +36,6 @@ TSV_COLUMNS: list[str] = [
     "description",
 ]
 
-LEGACY_TSV_COLUMNS: list[str] = [
-    col for col in TSV_COLUMNS if col != "interface_variant"
-]
-
 _NCU_DURATION_RE = re.compile(
     r"^\s*Duration\s+"
     r"(?P<unit>nsecond|usecond|msecond|second|ns|us|ms|s)\s+"
@@ -96,35 +92,8 @@ def init_results_tsv(tsv_path: str) -> None:
                 return
 
             lines = text.splitlines()
-            if not lines:
-                f.seek(0)
-                f.truncate()
-                f.write("\t".join(TSV_COLUMNS) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-                return
-
-            header = lines[0].split("\t")
+            header = lines[0].split("\t") if lines else []
             if header == TSV_COLUMNS:
-                return
-
-            if header == LEGACY_TSV_COLUMNS:
-                migrated = ["\t".join(TSV_COLUMNS)]
-                for line in lines[1:]:
-                    if not line:
-                        continue
-                    cells = line.split("\t")
-                    row = dict(zip(header, cells))
-                    row["interface_variant"] = "default"
-                    migrated.append(
-                        "\t".join(_tsv_cell(row.get(col, "")) for col in TSV_COLUMNS)
-                    )
-
-                f.seek(0)
-                f.truncate()
-                f.write("\n".join(migrated) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
                 return
 
             raise RuntimeError(
@@ -180,6 +149,11 @@ def read_results(tsv_path: str) -> list[dict]:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:
             reader = csv.DictReader(f, delimiter="\t")
+            if reader.fieldnames != TSV_COLUMNS:
+                raise RuntimeError(
+                    f"Unexpected TSV header in {tsv_path}: {reader.fieldnames!r}; "
+                    f"expected {TSV_COLUMNS!r}"
+                )
             return list(reader)
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
