@@ -285,6 +285,13 @@ them. Write the change down as a short description (e.g., "force bf16x2 add
 schedule", "try TMA staging for reused weights", "inline PTX cache hint for hot
 weights", "online state update to reduce stores", "reformulate SiLU sequence").
 
+If the hypothesis is a genuinely new line of attack, do not feel constrained by
+the current best branch. Feel free to start again from `a{AGENT_ID}/0` and build
+the idea cleanly from the baseline, especially when the idea implies a complete
+redesign of the algorithm, backend, dataflow, or kernel structure. In that case,
+use the actual branch you started from as `parent_id` in the result log and
+explain why restarting from baseline was the cleaner test.
+
 ### 3. Branch
 
 ```bash
@@ -473,6 +480,12 @@ The cost of complexity should be justified by evidence: a measured limiter, a
 clear mathematical transformation, or a concrete idea from a paper/blog/repo.
 Small cleanup-only changes are lower priority unless they directly test a
 profiled codegen or scheduling hypothesis.
+
+Complete redesigns are explicitly welcome. When a novel idea would be distorted
+by layering it on top of the current best implementation, start from
+`a{AGENT_ID}/0` again and treat the experiment as a fresh design path rather
+than an incremental patch. Preserve the old branches and notes, but optimize for
+the cleanest honest test of the new idea.
 
 ## Constraints and Tools
 
