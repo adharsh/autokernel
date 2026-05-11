@@ -59,7 +59,7 @@ autokernel/
 
 - It defines exactly one stress benchmark case. This is the performance target.
 - `validate.make_stress_inputs()` exposes that exact timing case.
-- `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with NCU and writes `results/reference_timing.json`.
+- `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with a lightweight NCU pass and writes `results/reference_timing.json`.
 - Every `validate.py` run prints the calibrated NCU-based `reference_us`; candidate timing comes from `scripts/profile_ncu.sh`.
 - Correctness-only cases broaden behavioral coverage but do not change the profiled `ncu_duration_us` timing case.
 
@@ -577,7 +577,8 @@ def read_results(csv_path: str) -> list[dict]:
 mkdir -p results/experiments
 printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
 
-# Verify reference and validation work
+# Verify reference and validation work. Calibration writes
+# results/reference_timing.json and is intentionally lightweight by default.
 uv run python scripts/calibrate_reference.py
 uv run python validate.py  # should PASS with reference implementation
 
@@ -634,7 +635,7 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="basel
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
 | 2 | `profile_utils.py` | `profile_utils.py` | NCU duration parsing, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Standard extensive Nsight Compute profile for every baseline, experiment, and reference calibration |
+| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Standard extensive Nsight Compute profile for every baseline and experiment, plus lightweight reference calibration |
 | 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
 | 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
 | 7 | Results TSV init | Part of setup | Header row creation + baseline recording |

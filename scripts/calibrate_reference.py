@@ -16,7 +16,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "results" / "reference_timing.json"
 DEFAULT_NCU_DIR = ROOT / "results" / "reference_ncu"
-DEFAULT_REFERENCE_WARMUP = 20
+DEFAULT_REFERENCE_WARMUP = 5
+DEFAULT_REFERENCE_NCU_SET = "basic"
 sys.path.insert(0, str(ROOT))
 
 import validate  # noqa: E402
@@ -46,8 +47,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ncu-set",
-        default=os.environ.get("AUTOKERNEL_REFERENCE_NCU_SET", "full"),
-        help="Nsight Compute section set for reference calibration.",
+        default=os.environ.get(
+            "AUTOKERNEL_REFERENCE_NCU_SET", DEFAULT_REFERENCE_NCU_SET
+        ),
+        help=(
+            "Nsight Compute section set for reference calibration. The default "
+            "is intentionally light because calibration only needs Duration rows."
+        ),
     )
     return parser.parse_args()
 
@@ -58,9 +64,6 @@ def ncu_reference_metrics(args: argparse.Namespace) -> tuple[float, int, Path, P
     report_path = report_base.with_suffix(".ncu-rep")
     log_path = args.ncu_dir / "reference.log"
     details_path = args.ncu_dir / "details.txt"
-
-    env = os.environ.copy()
-    env["AUTOKERNEL_REFERENCE_NCU_WARMUP"] = str(args.warmup)
 
     cmd = [
         "ncu",
@@ -77,10 +80,19 @@ def ncu_reference_metrics(args: argparse.Namespace) -> tuple[float, int, Path, P
         str(report_base),
         sys.executable,
         str(ROOT / "scripts" / "profile_reference_once.py"),
+        "--warmup",
+        str(args.warmup),
     ]
 
     with log_path.open("w") as log:
-        subprocess.run(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
+        subprocess.run(
+            cmd,
+            cwd=ROOT,
+            env=os.environ.copy(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
 
     details = subprocess.check_output(
         ["ncu", "--import", str(report_path), "--page", "details"],

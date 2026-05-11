@@ -103,7 +103,10 @@ uv run python validate.py
 
 `scripts/calibrate_reference.py` profiles `reference.kernel_fn` once with
 Nsight Compute on the single stress benchmark case and stores
-`results/reference_timing.json`.
+`results/reference_timing.json`. Calibration is intentionally lightweight by
+default: it uses the `basic` NCU section set and only enough warmup to keep lazy
+initialization out of the profiled invocation. Its purpose is to produce the
+reference Duration total, not a full performance analysis.
 
 `validate.py` still runs the reference implementation for correctness, but uses
 the calibrated `results/reference_timing.json` value for the printed
@@ -113,7 +116,9 @@ experiments.
 Candidate profiling uses `scripts/profile_ncu.sh`, not `validate.py` timing.
 Reference calibration profiles one reference invocation after warmup; override
 its warmup with `AUTOKERNEL_REFERENCE_NCU_WARMUP` or
-`scripts/calibrate_reference.py --warmup`.
+`scripts/calibrate_reference.py --warmup`. Override the NCU section set with
+`AUTOKERNEL_REFERENCE_NCU_SET` or `scripts/calibrate_reference.py --ncu-set`
+only when you specifically need deeper reference profiling.
 
 ## 5. Check Profiling
 

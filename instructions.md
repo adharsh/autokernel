@@ -19,7 +19,7 @@ Optional timing overrides:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTOKERNEL_REFERENCE_NCU_WARMUP` | `20` | Reference warmup calls before the NCU-profiled calibration invocation. |
+| `AUTOKERNEL_REFERENCE_NCU_WARMUP` | `5` | Reference warmup calls before the NCU-profiled calibration invocation. |
 | `AUTOKERNEL_NCU_WARMUP` | `20` | Warmup calls before the single profiled candidate invocation. |
 
 ### File rules
