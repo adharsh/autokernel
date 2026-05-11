@@ -192,6 +192,7 @@ run_checks() {
   run uv run python -c "import triton; print('triton', triton.__version__)"
   run uv run python -c "import cutlass; import cutlass.cute; print('cutlass dsl', getattr(cutlass, '__version__', 'unknown'))"
   run uv run python -c "import cuda.bindings, cuda.core; from cuda.bindings import nvrtc, nvjitlink, nvvm; print('cuda-python cuda.core nvrtc nvjitlink nvvm ok')"
+  echo "ok: Python dependency checks passed"
 }
 
 print_next_steps() {
