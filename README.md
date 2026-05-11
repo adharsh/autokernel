@@ -73,7 +73,7 @@ Populate these files only after `./scripts/setup.sh --sync --verify` completes:
 | File | Purpose |
 |------|---------|
 | `reference.py` | Trusted ground-truth implementation exposed as `kernel_fn`. |
-| `validate.py` | Fixed correctness, timing, and input test cases. |
+| `validate.py` | Correctness, timing, and input test cases. Normally fixed after task setup. |
 | `candidate/interface.py` | Starting optimization entry point exposed as `kernel_fn`. |
 
 Root `reference.py` and `validate.py` are task-specific. Reusable harness policy
@@ -91,6 +91,10 @@ Validation requirements:
 - Keep the printed labels stable: `reference_us`, `correctness`, `peak_vram_mb`.
 - Keep timing and correctness roles separate. Correctness-only cases broaden
   coverage but must not change the profiled timing case.
+- Deliberate input/API reformulations may update `reference.py` and
+  `validate.py` together when they preserve the same mathematical workload.
+  Record the input representation through `interface_variant`; do not put
+  precomputed operator work into inputs.
 
 ## 4. Calibrate And Validate
 
@@ -197,6 +201,12 @@ should be written for every experiment; `note.md`, `run.log`, NCU reports, and
 optional artifacts live under the per-experiment folder. `analysis.py` audits
 this coverage and flags notes that are missing the required NCU, speed-of-light,
 design-decision, or codegen/PTX/SASS sections.
+Rows include `interface_variant` so input/API reformulations stay visible in the
+shared table. Use `default` for the task's original interface and a short name
+such as `seq_idx` or `packed_layout` for deliberate variants.
+
+`interface_variant` is provenance metadata, not an execution switch; the
+experiment branch/commit remains the source of truth for the actual interface.
 
 Keep `results/experiments.tsv` as raw tab-separated data. Use
 `scripts/format_results.py` for aligned human-readable output; do not pad or

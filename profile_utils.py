@@ -32,7 +32,12 @@ TSV_COLUMNS: list[str] = [
     "correctness",
     "peak_vram_mb",
     "status",
+    "interface_variant",
     "description",
+]
+
+LEGACY_TSV_COLUMNS: list[str] = [
+    col for col in TSV_COLUMNS if col != "interface_variant"
 ]
 
 _NCU_DURATION_RE = re.compile(
@@ -72,7 +77,6 @@ def init_results_tsv(tsv_path: str) -> None:
 
     Uses exclusive locking to prevent races between concurrent agents.
     """
-    header_line = "\t".join(TSV_COLUMNS) + "\n"
     parent = os.path.dirname(tsv_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -83,12 +87,50 @@ def init_results_tsv(tsv_path: str) -> None:
     with os.fdopen(fd, "r+") as f:
         fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         try:
-            # Only write header if the file is empty (new or truncated).
-            f.seek(0, os.SEEK_END)
-            if f.tell() == 0:
-                f.write(header_line)
+            f.seek(0)
+            text = f.read()
+            if not text:
+                f.write("\t".join(TSV_COLUMNS) + "\n")
                 f.flush()
                 os.fsync(f.fileno())
+                return
+
+            lines = text.splitlines()
+            if not lines:
+                f.seek(0)
+                f.truncate()
+                f.write("\t".join(TSV_COLUMNS) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+                return
+
+            header = lines[0].split("\t")
+            if header == TSV_COLUMNS:
+                return
+
+            if header == LEGACY_TSV_COLUMNS:
+                migrated = ["\t".join(TSV_COLUMNS)]
+                for line in lines[1:]:
+                    if not line:
+                        continue
+                    cells = line.split("\t")
+                    row = dict(zip(header, cells))
+                    row["interface_variant"] = "default"
+                    migrated.append(
+                        "\t".join(_tsv_cell(row.get(col, "")) for col in TSV_COLUMNS)
+                    )
+
+                f.seek(0)
+                f.truncate()
+                f.write("\n".join(migrated) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+                return
+
+            raise RuntimeError(
+                f"Unexpected TSV header in {tsv_path}: {header!r}; "
+                f"expected {TSV_COLUMNS!r}"
+            )
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 

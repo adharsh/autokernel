@@ -1,6 +1,9 @@
 # AutoKernel Agent Playbook
 
-You are an autonomous kernel optimization agent. You modify code inside `candidate/` and run `validate.py` in a tight loop to minimize kernel latency. You never stop.
+You are an autonomous kernel optimization agent. You normally modify code inside
+`candidate/` and run `validate.py` in a tight loop to minimize kernel latency.
+For deliberate input/interface reformulations, you may also update
+`validate.py` and `reference.py` under the rules below. You never stop.
 
 ## Setup
 
@@ -15,21 +18,22 @@ Environment variables you receive:
 | `AUTOKERNEL_EXPERIMENTS_DIR` | `/path/to/results/experiments` | Per-experiment artifact root. Write detailed files under one folder per experiment. |
 | `AUTOKERNEL_REFERENCE_TIMING_PATH` | `/path/to/results/reference_timing.json` | Calibrated NCU reference runtime used by `validate.py`. |
 
-Optional timing overrides:
+Optional timing and metadata overrides:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AUTOKERNEL_REFERENCE_NCU_WARMUP` | `5` | Reference warmup calls before the NCU-profiled calibration invocation. |
 | `AUTOKERNEL_NCU_WARMUP` | `20` | Warmup calls before the single profiled candidate invocation. |
+| `AUTOKERNEL_INTERFACE_VARIANT` | `default` | Input/API representation recorded in `results/experiments.tsv`. Change this when an experiment deliberately changes the input representation, e.g. `seq_idx`. |
 
 ### File rules
 
 | File | Mutable? | Rule |
 |------|----------|------|
-| `validate.py` | NO | Never modify. Run it to test. |
-| `reference.py` | NO | Never modify. Ground truth. |
+| `validate.py` | CONDITIONAL | Normally fixed. May be modified only for a deliberate fair input/interface reformulation that preserves the same mathematical workload. Commit the change with the experiment. |
+| `reference.py` | CONDITIONAL | Normally fixed ground truth. May be modified only to match the same deliberate input/interface reformulation as `validate.py`. Commit the change with the experiment. |
 | `candidate/` | YES | All your optimization code goes here. `interface.py` is the Python entry point that `validate.py` imports. You may create additional files (`.py`, `.cu`, `.cuh`, etc.) inside `candidate/`. |
-| `$AUTOKERNEL_EXPERIMENTS_TSV` | APPEND-ONLY | Never delete or rewrite rows. |
+| `$AUTOKERNEL_EXPERIMENTS_TSV` | APPEND-ONLY | Never delete, reorder, or alter experiment data. Use the provided tooling for schema upgrades such as adding metadata columns. |
 | `$AUTOKERNEL_EXPERIMENTS_DIR` | APPEND-ONLY | Write detailed experiment artifacts. Never delete or rewrite existing experiment folders. |
 
 Do not commit `results/` to git. Leave it untracked.
@@ -45,6 +49,9 @@ reference contract.
 
 Legitimate compiler, extension, or autotuning artifact caches are allowed when
 they do not cache final answers or depend on recognizing the validation case.
+Inputs must describe the problem, not solve it. Do not add precomputed
+convolution windows, per-output validity matrices, partial reductions, partial
+outputs, or other operator work as inputs.
 
 ## Conv5 Mission: Hopper-Specific Next Level
 
@@ -119,6 +126,7 @@ cd $WORKTREE_PATH
 git branch a${AGENT_ID}/0 HEAD 2>/dev/null || true
 mkdir -p "$(dirname "$AUTOKERNEL_EXPERIMENTS_TSV")"
 EXPERIMENT_ID="a${AGENT_ID}/0"
+INTERFACE_VARIANT="${AUTOKERNEL_INTERFACE_VARIANT:-default}"
 SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
@@ -130,13 +138,14 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --experiment-id "a${AGENT_ID}/0" \
   --parent-id "-" \
   --status keep \
+  --interface-variant "$INTERFACE_VARIANT" \
   --description baseline \
   --run-log "$EXPERIMENT_DIR/run.log"
 NOTE_PATH="$EXPERIMENT_DIR/note.md"
 # Write a detailed baseline note at $NOTE_PATH after recording the row.
 ```
 
-The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory; the note is shared learning context and should be written when possible. Set `current_base = "a{AGENT_ID}/0"`, `best_speedup = 1.0`, `n = 1`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory; the note is shared learning context and should be written when possible. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`.
 
 ## Profiling Ground Truth
 
@@ -221,6 +230,45 @@ FlashAttention-style IO-aware algorithms, prefix/scan formulations, chunked or
 blocked recurrences, output/state fusion, recomputation-vs-storage tradeoffs,
 and algebraic simplification of BF16/FP32 rounding points.
 
+Input and representation reformulations are also in scope when they are
+mathematically honest and do not hide the same work outside the measured path.
+It is acceptable to ask whether the reference contract can be expressed with a
+more kernel-friendly equivalent representation, or with metadata that a real
+upstream caller would naturally already have. For example, `bos_mask` is a
+boolean start-marker representation such as `[1, 0, 0, 1, 0]`, while `seq_idx`
+is an explicit sequence id per token such as `[0, 0, 0, 1, 1]`. For causal conv,
+both prevent looking back across sequence boundaries, but `seq_idx` can turn a
+boundary-crossing check into `seq_idx[t] == seq_idx[t - lag]` instead of
+prefix/cumsum-style logic over `bos_mask`. Treat this kind of input change as a
+mathematical/data-model reformulation, not as evaluator manipulation.
+
+Deliberate input/interface reformulations may update `validate.py` and
+`reference.py`. Keep those updates minimal: preserve the same stress shape,
+correctness cases, seeds, dtype, activation, outputs, and mathematical semantics
+unless the human explicitly creates a different benchmark. Commit the
+`validate.py` and `reference.py` changes with the experiment, record the
+`interface_variant` in the TSV row, and explain the reformulation in the note.
+
+`interface_variant` is provenance metadata, not an execution switch: the branch
+commit is the source of truth for the actual interface and implementation.
+Agents should use the TSV field and notes to notice which input/API variant a
+result used, decide whether to continue from that branch, and avoid comparing or
+mixing incompatible interfaces by accident.
+
+For approved input reformulations, no conversion cost is included: the new
+representation is treated as the benchmark input, not as something converted
+from the old representation inside the measured path. This is fair only when the
+new input is compact problem metadata or layout, such as sequence ids, sequence
+lengths, offsets, or a declared tensor layout. It is not fair to add
+precomputed operator work as an input. The line is: a new input may describe the
+problem more directly, but it must not perform a meaningful chunk of the
+candidate's computation.
+
+Keep `reference_us` stable for pure input-representation reformulations that
+preserve the same semantic workload. Recalibrate only if the actual benchmark
+task changes, such as shape distribution, dtype, activation semantics, or output
+requirements; such changes should not happen without explicit human direction.
+
 A mathematical reformulation must still be a general implementation. It must pass
 the provided correctness tests without detecting evaluator behavior, memoizing
 answers, hardcoding outputs, or relying on benchmark-specific constants. If a
@@ -284,6 +332,14 @@ math/research-inspired changes over generic cleanup when the profile supports
 them. Write the change down as a short description (e.g., "force bf16x2 add
 schedule", "try TMA staging for reused weights", "inline PTX cache hint for hot
 weights", "online state update to reduce stores", "reformulate SiLU sequence").
+If the change deliberately changes the input/API representation, also set a
+short `INTERFACE_VARIANT` such as `seq_idx`, `cu_seqlens`, or `packed_layout`;
+otherwise keep the current variant.
+
+If the current best experiment uses a non-default `interface_variant`, branch
+from it only when the next hypothesis assumes that same interface. If the next
+idea assumes the original/default interface, branch from a compatible default
+ancestor instead.
 
 If the hypothesis is a genuinely new line of attack, do not feel constrained by
 the current best branch. Feel free to start again from `a{AGENT_ID}/0` and build
@@ -306,10 +362,22 @@ mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbenc
 
 Modify files inside `candidate/`. `interface.py` is the entry point that `validate.py` imports — you can create additional files (`.cu`, `.py`, etc.) as needed. One hypothesis per experiment.
 
+If the hypothesis is a deliberate input/interface reformulation, update
+`validate.py` and `reference.py` together in the same branch. Keep the update
+minimal and semantic-preserving: the input representation may change, but the
+task, shapes, seeds, dtype, activation, and required outputs should stay the
+same.
+
 ### 5. Commit
 
 ```bash
-git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"  # stages all files in candidate/
+git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"  # normal candidate-only experiment
+```
+
+For an input/interface reformulation, also stage the evaluator contract change:
+
+```bash
+git add candidate/ validate.py reference.py && git commit -m "a{AGENT_ID}/{n}: {description}"
 ```
 
 ### 6. Validate
@@ -355,6 +423,7 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --experiment-id "a${AGENT_ID}/${n}" \
   --parent-id "${current_base}" \
   --status "${status}" \
+  --interface-variant "${INTERFACE_VARIANT}" \
   --description "${description}" \
   --run-log "$EXPERIMENT_DIR/run.log"
 ```
@@ -380,6 +449,7 @@ The TSV row is the source of truth and must always be written. The note is share
 Parent: {current_base}
 Status: {keep|discard|crash}
 Commit: {short_commit}
+Interface Variant: {INTERFACE_VARIANT}
 
 ## Hypothesis
 What you expected to improve and why. Include the latest NCU limiter and the
@@ -392,6 +462,13 @@ evidence that ruled it out.
 
 ## Change
 What files/code paths changed. Include key parameters such as tile sizes, warps, stages, vector widths, backend, and fast-path guards.
+
+## Interface Variant
+State the recorded `interface_variant`. It must match the TSV row; if the note
+and TSV disagree, treat the TSV as the source of truth and the note as stale
+context. If this experiment changed the input/API representation, explain why it
+is a fair problem description, what changed in `validate.py` and `reference.py`,
+and why no operator work was precomputed into the inputs.
 
 ## Result
 Paste the four validate.py metrics and summarize whether latency improved versus parent/current best.
@@ -434,11 +511,11 @@ Concrete next experiments suggested by this result, or what not to try again.
 Columns (tab-separated):
 
 ```
-experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kernel_count  reference_us  speedup  correctness  peak_vram_mb  status  description
+experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kernel_count  reference_us  speedup  correctness  peak_vram_mb  status  interface_variant  description
 ```
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
-`reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments.
+`reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments. Keep it stable for input-representation changes that preserve the same semantic workload.
 The reported `ncu_duration_us` corresponds to the profiled candidate invocation from `validate.make_stress_inputs()`. `ncu_kernel_count` is the number of NCU kernel Duration rows summed for that invocation. Correctness-only cases are broader coverage and do not affect the reported timing case.
 
 ### 11. Keep or discard
@@ -499,8 +576,9 @@ the cleanest honest test of the new idea.
 
 ### Constraints
 
-- Never modify `validate.py` or `reference.py`
+- Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload
 - Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
+- Never add precomputed operator work to the inputs
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment

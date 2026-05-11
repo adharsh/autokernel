@@ -172,6 +172,7 @@ def _hover_text(row) -> str:
                        ("speedup", "Speedup"),
                        ("correctness", "Correctness"),
                        ("status", "Status"),
+                       ("interface_variant", "Interface"),
                        ("commit", "Commit"),
                        ("agent_id", "Agent"),
                        ("peak_vram_mb", "VRAM (MB)"),
@@ -527,8 +528,14 @@ def generate_report(df: pd.DataFrame) -> None:
         for _, r in kept_df.sort_values("ncu_duration_us").iterrows():
             c = f"{float(r['ncu_duration_us']):.2f} us" if pd.notna(r.get("ncu_duration_us")) else "N/A"
             s = f"{float(r['speedup']):.2f}x" if pd.notna(r.get("speedup")) else "N/A"
-            L.append(f"- **{r.get('experiment_id','?')}**: {c} (speedup: {s}) -- "
-                      f"{r.get('description','')}")
+            variant = r.get("interface_variant", "")
+            variant_text = (
+                f" [{variant}]"
+                if pd.notna(variant) and str(variant).strip() not in ("", "default")
+                else ""
+            )
+            L.append(f"- **{r.get('experiment_id','?')}**{variant_text}: "
+                      f"{c} (speedup: {s}) -- {r.get('description','')}")
         L.append("")
 
     failed = df[cats.isin(["crash", "discard"])]

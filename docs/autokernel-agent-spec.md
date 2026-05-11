@@ -8,8 +8,8 @@ This document specifies the complete autonomous kernel optimization agent system
 
 ```
 autokernel/
-├── validate.py              # FIXED — correctness + timing harness (test cases can only be ADDED, never removed)
-├── reference.py             # FIXED — reference implementation (ground truth)
+├── validate.py              # Normally fixed correctness + timing harness
+├── reference.py             # Normally fixed reference implementation (ground truth)
 ├── candidate/
 │   ├── __init__.py
 │   └── interface.py         # Agent edits THIS — all optimization code, bindings, utilities
@@ -44,11 +44,11 @@ autokernel/
 
 | File | Who edits | Rules |
 |------|-----------|-------|
-| `validate.py` | Human only | Test cases can be ADDED, never removed or modified |
-| `reference.py` | Nobody | Ground truth, never modified |
+| `validate.py` | Human / deliberate agent reformulation | Normally fixed. May change only for a committed input/interface reformulation that preserves the same mathematical workload |
+| `reference.py` | Human / deliberate agent reformulation | Normally fixed ground truth. May change only together with `validate.py` for the same input/interface reformulation |
 | `candidate/interface.py` | Agent | All optimization code lives here |
 | `candidate/__init__.py` | Agent | Exports from interface.py |
-| `results/experiments.tsv` | Agent (append-only) | Never delete rows, never rewrite existing rows |
+| `results/experiments.tsv` | Agent (append-only) | Never delete, reorder, or alter experiment data. Use provided tooling for schema upgrades such as adding metadata columns |
 | `results/experiments/*` | Agent/tool output | Per-experiment artifacts. Never delete or rewrite existing experiment folders |
 | `instructions.md` | Human | Agent reads, never modifies |
 | `analysis.py` | Human / setup | Agent may run but never modifies |
@@ -62,6 +62,10 @@ autokernel/
 - `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with a lightweight NCU pass and writes `results/reference_timing.json`.
 - Every `validate.py` run prints the calibrated NCU-based `reference_us`; candidate timing comes from `scripts/profile_ncu.sh`.
 - Correctness-only cases broaden behavioral coverage but do not change the profiled `ncu_duration_us` timing case.
+- Deliberate input/API reformulations may change `validate.py` and
+  `reference.py` together while preserving the same semantic task. Record the
+  representation in `interface_variant` and do not add precomputed operator work
+  as inputs.
 
 ---
 
@@ -71,7 +75,7 @@ autokernel/
 
 **Header**:
 ```
-experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	description
+experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description
 ```
 
 **Column definitions**:
@@ -90,7 +94,14 @@ experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_cou
 | `correctness` | string | `PASS` | `PASS`, `FAIL`, or `CRASH` |
 | `peak_vram_mb` | float | `2048.5` | Peak GPU memory used during benchmark |
 | `status` | string | `keep` | `keep`, `discard`, or `crash` |
+| `interface_variant` | string | `default` | Input/API representation for this row, e.g. `default`, `seq_idx`, `cu_seqlens`, or `packed_layout` |
 | `description` | string | `fuse norm+proj` | Short description of what was tried |
+
+`interface_variant` is provenance metadata, not an execution switch. The
+experiment branch/commit is the source of truth for the actual interface and
+implementation. Agents read this field from the shared TSV and notes when
+deciding whether to continue from a variant branch or return to a compatible
+default-interface ancestor.
 
 **Concurrency**: Multiple agents append to the same file. Use `scripts/record_result.py`, which calls `profile_utils.append_result()` and uses `fcntl.flock()` for atomic writes. Agents must not use `echo >>` for experiment rows.
 
@@ -374,20 +385,20 @@ Bottleneck: matmul_qkv (38.2%)
 ## 8. Main Optimization Agent (instructions.md)
 
 ### Overview
-Each agent follows the same playbook, running autonomously in its own worktree on a pinned GPU. The agent modifies `candidate/interface.py` and runs `validate.py` in a tight loop.
+Each agent follows the same playbook, running autonomously in its own worktree on a pinned GPU. The agent normally modifies `candidate/interface.py` and runs `validate.py` in a tight loop. For deliberate input/interface reformulations, the agent may also update `validate.py` and `reference.py` under the constraints below.
 
 ### Experiment loop (NEVER STOP — run indefinitely)
 ```
 1. Read shared experiments.tsv and recent/best experiment folders/notes
 2. Hypothesize one focused optimization change
 3. git checkout -b a{id}/{n} {current_base}    # new branch from last keep
-4. Edit candidate/interface.py
-5. git add candidate/ && git commit -m "a{id}/{n}: <description>"
+4. Edit candidate/interface.py; for input/interface reformulations, also update validate.py and reference.py together
+5. git add candidate/ && git commit -m "a{id}/{n}: <description>" (also stage validate.py/reference.py for interface reformulations)
 6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract calibrated reference_us, correctness, peak_vram_mb
 7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}"
 8. Compute speedup = reference_us / ncu_duration_us and decide status
-9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base)
-10. Write results/experiments/a{id}_{n}/note.md with NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
+9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base, interface_variant recorded)
+10. Write results/experiments/a{id}_{n}/note.md with interface_variant, NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
 11. If correctness == PASS and speedup > previous best:
      status = "keep"
      current_base = experiment_id           # advance base (stay on this branch)
@@ -414,8 +425,9 @@ recognizing the validation case.
 Use whichever backend (PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE DSL, PTX) is most appropriate for the measured limiter. Keep changes focused — one hypothesis per experiment. Backend changes must cite the latest NCU speed-of-light gap and limiting factor. If an obvious speedup is not available, agents must inspect deeper profiling details and try justified lower-level changes before moving on.
 
 ### Constraints
-- Never modify `validate.py` or `reference.py`
+- Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload
 - Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
+- Never add precomputed operator work to inputs
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment
@@ -575,7 +587,7 @@ def read_results(csv_path: str) -> list[dict]:
 ```bash
 # Initialize results/experiments.tsv with header and create artifact root
 mkdir -p results/experiments
-printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tdescription\n' > results/experiments.tsv
+printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tinterface_variant\tdescription\n' > results/experiments.tsv
 
 # Verify reference and validation work. Calibration writes
 # results/reference_timing.json and is intentionally lightweight by default.
@@ -602,7 +614,7 @@ uv run python validate.py → extract reference_us, correctness, peak_vram_mb
 scripts/profile_ncu.sh "a${AGENT_ID}/0" → write required baseline NCU report
 
 # Record baseline
-append_result("a${AGENT_ID}/0", parent_id="-", status="keep", description="baseline")
+append_result("a${AGENT_ID}/0", parent_id="-", status="keep", interface_variant="default", description="baseline")
 # current_base = "a${AGENT_ID}/0"
 ```
 

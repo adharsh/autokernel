@@ -29,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--experiment-id", required=True)
     parser.add_argument("--parent-id", required=True)
     parser.add_argument("--status", required=True, choices=("keep", "discard", "crash"))
+    parser.add_argument(
+        "--interface-variant",
+        default=os.environ.get("AUTOKERNEL_INTERFACE_VARIANT", "default"),
+        help="Input/API representation used by this experiment, e.g. default or seq_idx.",
+    )
     parser.add_argument("--description", required=True)
     parser.add_argument("--agent-id", default=os.environ.get("AGENT_ID"))
     parser.add_argument("--run-log", type=Path, default=Path("run.log"))
@@ -179,6 +184,7 @@ def main() -> None:
         "correctness": metrics["correctness"],
         "peak_vram_mb": metrics["peak_vram_mb"],
         "status": args.status,
+        "interface_variant": args.interface_variant,
         "description": args.description,
     }
 
@@ -186,7 +192,8 @@ def main() -> None:
     append_result(str(args.tsv), row)
     print(
         f"recorded {row['experiment_id']} status={row['status']} "
-        f"speedup={row['speedup']} tsv={args.tsv}"
+        f"speedup={row['speedup']} interface={row['interface_variant']} "
+        f"tsv={args.tsv}"
     )
 
 
