@@ -317,12 +317,41 @@ the metric interpretation reference:
 shows a timeline/launch/synchronization question or when per-line attribution is
 needed. They complement the required NCU profile and do not replace it.
 
-Backend selection is downstream of profiling. Agents may use PyTorch, Triton,
-CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE DSL, or PTX, but the chosen
-level must be justified by the measured limiter. If NCU shows compiler/codegen,
-instruction selection, occupancy, coalescing, memory layout, synchronization,
-scheduling, or other kernel-level limits that require lower-level control,
-agents should move lower in the stack.
+Backend selection is downstream of profiling and the current experiment
+hypothesis. Agents should explore the core stack freely when there is a
+plausible profile, codegen, or algorithmic reason: PyTorch for
+reference/scaffolding, Triton, CUDA C++, CuTe/CUTLASS, and CUDA C++ with inline
+PTX/SASS-guided work. The usual fit of each backend is guidance, not a
+checklist; the measured limiter and the hypothesis decide.
+
+The core stack is sufficient to reach the relevant NVIDIA hardware mechanisms:
+custom memory layouts and fused kernels through Triton, explicit launch and
+memory-control through CUDA C++, Tensor Core and tiled kernel construction
+through CuTe/CUTLASS, and last-mile instruction/codegen work through inline PTX
+or SASS-guided CUDA. Experimental DSLs may improve productivity or provide
+excellent examples, but they do not unlock a separate roofline that the core
+stack cannot reach in principle.
+
+Do not allow agents to install, vendor, add to `pyproject.toml`, or use new
+experimental DSLs as implementation backends by default. This includes TileLang,
+Gluon/TLX, Helion, cuTile/TileIR, ThunderKittens, and similar systems. The main
+risks are dependency drift across agents, CUDA/PyTorch version conflicts,
+non-reproducible results, install/debug time displacing optimization time,
+unreviewed third-party code in the benchmark path, and noisy experiment
+provenance.
+
+Those repositories are still valuable research inputs. Agents should read them
+for algorithms, tiling, dataflow, scheduling, masking, quantization, grouped-GEMM,
+MoE routing, and codegen ideas, then reimplement the idea in the allowed core
+stack. Relevant examples include DeepSeek TileKernels, DeepSeek DeepGEMM,
+TileLang operator libraries, Gluon/TLX kernels, Helion examples, cuTile/TileIR
+examples, and ThunderKittens kernels.
+
+An experimental DSL backend is allowed only by explicit human override. Treat
+that as a scoped exception: use an isolated branch/environment, state the exact
+hypothesis, avoid unrelated dependency churn, keep the experiment reproducible,
+and promote the dependency only if it clearly wins and the human accepts the
+maintenance cost.
 
 PTX/SASS inspection is part of that escalation path. It is not a replacement for
 NCU and should not be forced on every experiment; it is required when the NCU
@@ -422,7 +451,19 @@ caches are allowed only when they do not cache final answers or depend on
 recognizing the validation case.
 
 ### Optimization strategy
-Use whichever backend (PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE DSL, PTX) is most appropriate for the measured limiter. Keep changes focused — one hypothesis per experiment. Backend changes must cite the latest NCU speed-of-light gap and limiting factor. If an obvious speedup is not available, agents must inspect deeper profiling details and try justified lower-level changes before moving on.
+Use the core backend stack according to the measured limiter and experiment
+hypothesis: PyTorch for reference/scaffolding, Triton, CUDA C++,
+CuTe/CUTLASS, and CUDA C++ with inline PTX/SASS-guided work. Keep changes
+focused -- one hypothesis per experiment. Backend changes must cite the latest
+NCU speed-of-light gap and limiting factor. If an obvious speedup is not
+available, agents must inspect deeper profiling details and try justified
+lower-level changes before moving on.
+
+Experimental DSLs are research sources by default, not implementation
+backends. Agents may read TileLang, Gluon/TLX, Helion, cuTile/TileIR,
+ThunderKittens, DeepSeek TileKernels, DeepSeek DeepGEMM, and similar repos for
+ideas, but must not install or depend on those toolchains unless the human has
+explicitly approved a scoped exception.
 
 ### Constraints
 - Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload

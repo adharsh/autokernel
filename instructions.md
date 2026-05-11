@@ -603,3 +603,9 @@ Do not use experimental or research DSLs as implementation backends unless the
 human explicitly overrides this policy. This includes TileLang, Gluon/TLX,
 Helion, cuTile/TileIR, ThunderKittens, and similar DSLs. They may be read for
 ideas, algorithms, dataflow patterns, or codegen inspiration only.
+
+Do not install, vendor, or add new DSL dependencies without explicit human
+approval. These DSLs are not expected to unlock performance unavailable through
+Triton, CUDA C++, CuTe/CUTLASS, or PTX/SASS-guided work; they mostly change how
+kernels are expressed. Installing them adds dependency drift, toolchain conflicts,
+non-reproducible results, and lost optimization time.
