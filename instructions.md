@@ -189,14 +189,9 @@ question from NCU, such as host launch overhead, synchronization gaps,
 multi-kernel timeline behavior, or line-by-line attribution. They complement
 NCU; they do not replace the required NCU pass.
 
-Backend choices must be driven by profiling, but bias toward lower-level control
-when the current CUDA kernel is near the limit. Use PyTorch, Triton, CUDA C++,
-CUDA C++ with inline PTX, CUTLASS, CUTE DSL, or PTX as appropriate. State what
-the latest NCU profile says is limiting progress and why that backend is the
-right response. If NCU shows compiler/codegen, instruction selection, occupancy,
-memory coalescing, memory layout, synchronization, or scheduling limits that
-require lower-level control, move lower in the stack instead of making cosmetic
-source edits.
+Backend choices are the agent's responsibility and must be driven by profiling.
+Follow the Backend Policy below, and explain any backend switch using the latest
+NCU evidence.
 
 ### Architecture-Specific Optimization
 
@@ -282,14 +277,20 @@ resort. Search for official architecture documentation, CUDA/PTX guides, relevan
 arXiv papers, vendor/engineering blog posts, numerical-analysis references, and
 public GitHub repositories with related high-performance kernels. Relevant work
 can include FlashAttention, selective scan/state-space kernels, fused recurrence
-kernels, persistent kernels, CUTLASS/CUTE examples, ThunderKittens-style kernels,
-Triton/CUDA blogs, and repository code that demonstrates useful Hopper dataflow
-or math transformations. Prefer official documentation for architecture and
-instruction semantics. Use papers, blogs, and repos for design inspiration and
-implementation patterns. When external research affects a design, cite the URL,
-paper title/arXiv ID, or repository in the note and explain the concrete
-implementation idea it motivates. Do not add bibliography-style citations for
-sources that did not change the design.
+kernels, persistent kernels, CUTLASS/CuTe examples, Triton/CUDA blogs, and
+repository code that demonstrates useful Hopper dataflow or math
+transformations. Also mine high-performance DSL and research-kernel repos for
+ideas, including DeepSeek TileKernels, DeepSeek DeepGEMM, TileLang, Gluon/TLX,
+Helion, cuTile/TileIR, ThunderKittens, and similar projects. Look for algorithms,
+tiling, dataflow, scheduling, quantization, MoE routing, grouped-GEMM, masking,
+layout, and codegen ideas that can be reimplemented in the allowed core stack.
+Prefer official documentation for architecture and instruction semantics. Use
+papers, blogs, and repos for design inspiration and implementation patterns, not
+as permission to adopt experimental DSLs as implementation backends. When
+external research affects a design, cite the URL, paper title/arXiv ID, or
+repository in the note and explain the concrete implementation idea it motivates.
+Do not add bibliography-style citations for sources that did not change the
+design.
 
 PTX/SASS inspection is profile-triggered, not mandatory for every experiment.
 Inspect generated PTX, cubin, or SASS when NCU suggests a codegen or
@@ -487,8 +488,7 @@ latency/occupancy, launch overhead, or framework overhead limited.
 ## Design Decision From Profile
 State what the NCU evidence says is limiting performance, what experiment should
 be tried next, and whether that means staying in the current backend or moving
-lower level: PyTorch, Triton, CUDA C++, CUDA C++ with inline PTX, CUTLASS, CUTE
-DSL, or PTX.
+lower in the core stack.
 
 When relevant, connect the decision to the actual GPU architecture: data layout,
 memory movement, tensor/memory instructions, synchronization, launch overhead,
@@ -585,8 +585,21 @@ the cleanest honest test of the new idea.
 - VRAM must stay below 80% of GPU capacity
 - Always preserve experiment branches (no `git reset --hard`, no `git branch -D`)
 
-### Backends
+### Backend Policy
 
-Use whichever is appropriate: PyTorch, Triton, CUDA C++, CUDA C++ with inline
-PTX, CUTLASS, CUTE DSL, PTX. The appropriate backend is the one justified by the
-latest NCU evidence and the explicit speed-of-light gap in the experiment notes.
+Choose the backend from the current bottleneck and experiment hypothesis, not
+from a checklist. Explore the core stack liberally when profiling, codegen, or
+algorithmic reasoning suggests a plausible path. The core stack is PyTorch,
+Triton, CUDA C++, CuTe/CUTLASS, and CUDA C++ with inline PTX/SASS-guided work.
+Treat the usual fit of each backend as guidance, not as a restriction: PyTorch is
+often useful for reference/scaffolding and baseline checks; Triton for rapid
+kernel iteration and many fused/custom kernels; CUDA C++ for more explicit
+control; CuTe/CUTLASS for Tensor Core, tiled, GEMM-like, attention-like, or
+other structured kernels; and inline PTX/SASS-guided work for low-level
+instruction, scheduling, register, cache, or unsupported-instruction
+opportunities.
+
+Do not use experimental or research DSLs as implementation backends unless the
+human explicitly overrides this policy. This includes TileLang, Gluon/TLX,
+Helion, cuTile/TileIR, ThunderKittens, and similar DSLs. They may be read for
+ideas, algorithms, dataflow patterns, or codegen inspiration only.
