@@ -190,8 +190,8 @@ run_checks() {
 
   run uv run python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpu', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
   run uv run python -c "import triton; print('triton', triton.__version__)"
-  run uv run python -c "import cutlass_library, cutlass_cppgen; print('cutlass ok')"
-  run uv run python -c "from cuda.bindings import nvrtc; print('cuda-python nvrtc ok')"
+  run uv run python -c "import cutlass; import cutlass.cute; print('cutlass dsl', getattr(cutlass, '__version__', 'unknown'))"
+  run uv run python -c "import cuda.bindings, cuda.core; from cuda.bindings import nvrtc, nvjitlink, nvvm; print('cuda-python cuda.core nvrtc nvjitlink nvvm ok')"
 }
 
 print_next_steps() {

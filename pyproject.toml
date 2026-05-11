@@ -5,13 +5,14 @@ description = "Autonomous GPU kernel optimization with multi-agent experimentati
 requires-python = ">=3.10"
 dependencies = [
     # Core
-    "torch==2.9.1",
+    "torch==2.10.0",
     "triton>=3.3.0",
     "numpy>=2.2.0",
-    # CUDA Python bindings (PTX, NVRTC, driver API)
-    "cuda-python>=12.6.0",
-    # CUTLASS Python (CUTE DSL)
-    "nvidia-cutlass>=3.6.0",
+    # CUDA Python bindings and CUDA 12.x toolkit components
+    "cuda-python[all]>=12.9,<13",
+    "cuda-core>=0.4.0",
+    # CUTLASS Python / CuTe DSL
+    "nvidia-cutlass-dsl>=4.5.0",
     # Profiling & analysis
     "matplotlib>=3.10.0",
     "plotly>=6.0.0",
