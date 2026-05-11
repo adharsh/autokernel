@@ -387,7 +387,7 @@ uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
 grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 ```
 
-If grep is empty, the run crashed. Read `tail -n 50 "$EXPERIMENT_DIR/run.log"` for the traceback. If it is a trivial fix (typo, import), fix and re-run. Otherwise log as crash and move on.
+If grep is empty, the run crashed. Read `tail -n 50 "$EXPERIMENT_DIR/run.log"` for the traceback. If it is a trivial fix (typo, import), fix and re-run. If you edit anything after the experiment commit, amend the commit and rerun validation before profiling or recording. Otherwise log as crash and move on.
 
 ### 7. Profile With NCU
 
