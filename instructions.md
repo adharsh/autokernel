@@ -270,6 +270,18 @@ answers, hardcoding outputs, or relying on benchmark-specific constants. If a
 reformulation changes rounding behavior, explain why the error is acceptable
 under the reference contract and verify it with `validate.py`.
 
+When documenting mathematical reformulations in Markdown notes (`note.md` or
+`notes.md`), write equations in KaTeX-compatible Markdown math so the rendered
+view is readable. Use `$...$` for inline math and `$$...$$` for display math,
+and avoid notation or macros that KaTeX does not support.
+
+For every mathematical reformulation, include a human-readable proof or proof
+sketch in the note. State the original formulation, the transformed formulation,
+the assumptions and boundary conditions, and the algebraic or recurrence steps
+that prove equivalence. If the reformulation intentionally changes floating
+point rounding, prove the exact real-number equivalence first, then explain the
+rounding/tolerance argument and cite the `validate.py` evidence.
+
 ### External Research
 
 Use internet access as a normal part of the optimization loop, not only as a last
