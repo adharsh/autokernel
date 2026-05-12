@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/agents.sh start    # fresh start, one agent per GPU
 #   ./scripts/agents.sh stop     # kill all running agents
-#   ./scripts/agents.sh resume   # resume interrupted agents
+#   ./scripts/agents.sh resume   # fresh conversations for existing agent worktrees
 #   ./scripts/agents.sh status   # show which agents are alive
 #   AGENT_CLI=claude ./scripts/agents.sh start
 
@@ -204,22 +204,18 @@ _check_task_files() {
 
 # Sets: _agent_pid
 _launch_agent() {
-  local mode="$1"
-  local gpu_id="$2"
-  local agent_id="$3"
-  local worktree="$4"
-  local log="$5"
-  local prompt="$6"
+  local gpu_id="$1"
+  local agent_id="$2"
+  local worktree="$3"
+  local log="$4"
+  local prompt="$5"
   local old_pwd="$PWD"
-  local claude_resume_args=()
+  # All launches start a fresh CLI conversation. Resume state is reconstructed
+  # from the worktree, experiments TSV, logs, and notes via the prompt.
   local codex_cmd=(exec)
 
   case "$AGENT_CLI" in
     claude)
-      if [ "$mode" = "resume" ]; then
-        claude_resume_args=(--continue)
-      fi
-
       AGENT_ID=$agent_id \
         WORKTREE_PATH=$worktree \
         AUTOKERNEL_ROOT=$ROOT \
@@ -229,7 +225,6 @@ _launch_agent() {
         AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
         CUDA_VISIBLE_DEVICES=$gpu_id \
         "$CLAUDE_BIN" -p \
-          "${claude_resume_args[@]}" \
           --model "$CLAUDE_MODEL" \
           --effort "$CLAUDE_EFFORT" \
           --output-format stream-json \
@@ -241,10 +236,6 @@ _launch_agent() {
       _agent_pid=$!
       ;;
     codex)
-      if [ "$mode" = "resume" ]; then
-        codex_cmd=(exec resume --last)
-      fi
-
       cd "$worktree"
       AGENT_ID=$agent_id \
         WORKTREE_PATH=$worktree \
@@ -355,7 +346,7 @@ cmd_start() {
     echo "Launching agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
     : > "$LOG"
 
-    _launch_agent start "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
+    _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
       "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, inspect the full profiling details and try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Start the experiment loop now. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
@@ -381,6 +372,7 @@ cmd_resume() {
   fi
 
   local agent_ids=()
+  local worktrees=()
   local line
   while read -r line; do
     [ -n "$line" ] || continue
@@ -402,25 +394,33 @@ cmd_resume() {
 
   _init_results_tsv
   mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
+
+  for AGENT_ID in "${agent_ids[@]}"; do
+    WORKTREE=$(_agent_worktree_path "$AGENT_ID")
+    _prepare_worktree_results_link "$WORKTREE"
+    worktrees+=("$WORKTREE")
+  done
+
+  echo "Stopping currently tracked agent processes before fresh resume..."
+  cmd_stop
   : > "$PID_FILE"
 
   for GPU_ID in "${!agent_ids[@]}"; do
     AGENT_ID=${agent_ids[$GPU_ID]}
-    WORKTREE=$(_agent_worktree_path "$AGENT_ID")
-    _prepare_worktree_results_link "$WORKTREE"
+    WORKTREE=${worktrees[$GPU_ID]}
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
-    echo "Resuming agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
+    echo "Starting fresh conversation for agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
-    _launch_agent resume "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You were interrupted. Read $TSV to find your last experiment number and current_base. Check which git branch you're on. Resume the experiment loop from where you left off. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, inspect the full profiling details and try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Never stop. Never ask the user anything."
+    _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
+      "You are agent $AGENT_ID in a fresh conversation. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Do not rely on prior chat state. Treat disk artifacts as the source of truth: read and follow $ROOT/instructions.md, inspect the current git branch/status/log in $WORKTREE, read $TSV, and read relevant experiment notes under $EXPERIMENTS_DIR, especially this agent's a${AGENT_ID}_* notes and the best keep rows from the TSV. Use that provenance to identify any interrupted work, the next unused a${AGENT_ID}/N experiment id, and the strongest current parent/result to build from. Do not assume you must continue this agent's previous branch if the TSV and notes show a better global parent; choose the next experiment from the durable evidence. If you find an interrupted experiment, inspect its branch, files, run logs, NCU outputs, and note before deciding whether to finish, record, discard, or branch from the latest stronger result. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels, base next design decisions on the NCU speed-of-light and limiter analysis in the note, and record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, inspect the full profiling details and try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Resume the experiment loop now. Never stop. Never ask the user anything."
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
   done
 
   echo ""
-  echo "All agents resumed. Monitor with:"
+  echo "All agents resumed with fresh conversations. Monitor with:"
   echo "  ./scripts/agents.sh status"
 }
 
