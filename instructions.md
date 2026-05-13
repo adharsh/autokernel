@@ -38,6 +38,20 @@ Optional timing and metadata overrides:
 
 Do not commit `results/` to git. Leave it untracked.
 
+### Optional Example Implementations
+
+The `examples/` directory contains other implementations that agents may inspect
+for API and semantic context.
+
+These files are not the evaluator and are not the correctness source of truth.
+`reference.py` and `validate.py` define the task contract.
+
+Feel free to take inspiration from examples: API conventions, edge-case
+handling, supported shapes, dtype behavior, data layout choices, and useful
+implementation tradeoffs. Adapt ideas when they help the measured task, and
+explain the influence in the experiment note. `reference.py` and `validate.py`
+remain the final authority for correctness.
+
 ## Submission Integrity
 
 Optimize the implementation, not the evaluator. Do not memoize answers, cache or
@@ -317,6 +331,38 @@ code than PTX. Save inspected artifacts under
 
 Run this loop indefinitely. Do not pause to ask the human anything. Do not ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. You are autonomous.
 
+### Correctness Failure Policy
+
+Correctness is a hard gate. A fast kernel with `correctness: FAIL` or
+`correctness: CRASH` is not a useful speed result and must never become
+`current_base`, even if NCU shows a large speedup.
+
+When `validate.py` fails after an edit, keep fixing the code in that experiment
+branch until correctness passes whenever the failure looks plausibly fixable:
+shape mistakes, launch bounds, boundary/BOS semantics, dtype/rounding mistakes,
+incorrect final states, import/build errors, or other implementation bugs.
+Repeat the loop:
+
+```bash
+uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
+tail -n 80 "$EXPERIMENT_DIR/run.log"
+# edit candidate/
+git add candidate/ && git commit --amend --no-edit
+```
+
+Then rerun validation. Do this as many times as needed for the same hypothesis
+while it remains technically promising. Do not abandon a promising idea after the
+first correctness failure; reduce the shape, compare intermediate values against
+`reference.py`, inspect launch parameters, and debug the actual semantic error.
+
+Only stop fixing that branch when the evidence says the hypothesis is wrong,
+too slow by design, numerically invalid under the tolerance, or blocked by the
+available tools. In that case, record the failed branch as `discard` or `crash`
+with a clear note, then return to the last passing `current_base`. If a failed
+branch is still the right foundation for a follow-up, create a new child branch
+from it and keep debugging there, but do not mark either branch as `keep` until
+`validate.py` reports `correctness: PASS`.
+
 ### 1. Read Shared Memory
 
 Before choosing a hypothesis, inspect the shared experiment memory:
@@ -400,7 +446,14 @@ uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
 grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 ```
 
-If grep is empty, the run crashed. Read `tail -n 50 "$EXPERIMENT_DIR/run.log"` for the traceback. If it is a trivial fix (typo, import), fix and re-run. If you edit anything after the experiment commit, amend the commit and rerun validation before profiling or recording. Otherwise log as crash and move on.
+If `correctness` is not `PASS`, treat it as a blocking implementation bug first.
+Keep fixing the code and amending the experiment commit until correctness passes,
+unless the Correctness Failure Policy above says the branch should be recorded as
+failed and abandoned. If grep is empty, the run crashed. Read
+`tail -n 50 "$EXPERIMENT_DIR/run.log"` for the traceback. If it is a trivial fix
+(typo, import, launch argument), fix and re-run. If you edit anything after the
+experiment commit, amend the commit and rerun validation before profiling or
+recording.
 
 ### 7. Profile With NCU
 
