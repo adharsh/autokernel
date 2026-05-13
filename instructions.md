@@ -159,7 +159,7 @@ NOTE_PATH="$EXPERIMENT_DIR/note.md"
 # Write a detailed baseline note at $NOTE_PATH after recording the row.
 ```
 
-The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory; the note is shared learning context and should be written when possible. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before starting the next experiment. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`.
 
 ## Profiling Ground Truth
 
@@ -189,6 +189,18 @@ stored as `ncu_kernel_count`. By default the NCU helper does not run the full
 validation timing loop; it runs
 `scripts/profile_candidate_once.py`, warms up the candidate, then profiles one
 candidate invocation using CUDA profiler start/stop markers.
+
+### Profile-Driven Decisions
+
+After each NCU run, write `note.md` before starting the next experiment. The
+note must identify the measured bottleneck, cite the profile evidence, and
+choose the next experiment from that evidence. Include only the detailed profile
+metrics that are available and relevant; the concrete checklist belongs in the
+note template below.
+
+If the NCU output is missing the metric needed for a decision, say what is
+missing and gather it with NCU, `nsys`, a microbench, PTX/SASS inspection, or a
+focused debug run before making the design claim.
 
 Before the first optimization pass for a task, read NVIDIA's official Nsight
 Compute documentation and Kernel Profiling Guide. Use them as the interpretation
@@ -468,6 +480,10 @@ the note that NCU could not profile a kernel. If NCU itself fails because
 profiling permissions or tools are missing, treat the environment as blocked:
 the experiment is not fully usable for design decisions until NCU succeeds.
 
+Immediately after profiling, write the profile-driven decision in `note.md`. Do
+not move to the next edit until the note states the measured limiter, the
+evidence for it, and the next decision that follows from it.
+
 ### 8. Compute Speedup And Status
 
 ```
@@ -501,13 +517,14 @@ missing correctness is recorded as `CRASH`.
 
 ### 10. Write Detailed Note
 
-Write one Markdown note after recording the row when possible:
+Write one Markdown note after recording the row and before starting the next
+experiment:
 
 ```bash
 NOTE_PATH="$EXPERIMENT_DIR/note.md"
 ```
 
-The TSV row is the source of truth and must always be written. The note is shared memory for learning and should be thorough enough for other agents to learn from it. Prefer this format:
+The TSV row is the source of truth and must always be written. The note is shared memory for learning and must be thorough enough for other agents to learn from it. A note that only says what changed and whether it was faster is incomplete; it must analyze the profile and make a design decision from that analysis. Use this format:
 
 ```markdown
 # a{AGENT_ID}/{n}: {description}
@@ -518,8 +535,8 @@ Commit: {short_commit}
 Interface Variant: {INTERFACE_VARIANT}
 
 ## Hypothesis
-What you expected to improve and why. Include the latest NCU limiter and the
-Hopper/H200-specific reasoning.
+What you expected to improve and why. Include the parent/current-best NCU
+limiter that motivated the experiment and the Hopper/H200-specific reasoning.
 
 ## Architecture / Research Review
 State which Hopper/H200 mechanism, mathematical reformulation, or external source
@@ -540,9 +557,13 @@ and why no operator work was precomputed into the inputs.
 Paste the four validate.py metrics and summarize whether latency improved versus parent/current best.
 
 ## NCU Profile
-Profile path and the key Nsight Compute facts. Include achieved SM throughput,
-achieved memory throughput, occupancy, memory traffic, instruction mix if
-relevant, dominant stall reasons, and any notable launch/runtime facts.
+Summarize the profile path and decisive Nsight Compute facts. Do not paste only
+raw duration. Include only metrics that are available and relevant: total
+profiled duration, kernel count, one-dominant-kernel vs many-small-kernels
+behavior, SM SOL, memory SOL, roofline/SOL percentages, occupancy/active warps,
+register or shared-memory pressure, dominant stalls, memory traffic,
+coalescing/cache behavior, instruction mix, launch overhead, framework
+overhead, or codegen facts. Say which metric is decisive and why.
 
 ## Speed-of-Light Gap
 State how far the current kernel appears to be from speed of light. Use NCU's
@@ -551,9 +572,17 @@ latency floor you infer. Call out whether the gap is compute, memory bandwidth,
 latency/occupancy, launch overhead, or framework overhead limited.
 
 ## Design Decision From Profile
-State what the NCU evidence says is limiting performance, what experiment should
-be tried next, and whether that means staying in the current backend or moving
-lower in the core stack.
+This is the most important section. State what the NCU evidence says is limiting
+performance, what experiment should be tried next, and whether that means
+staying in the current backend or moving lower in the core stack. The decision
+must follow from measured profile facts, not from intuition alone.
+
+Answer these four questions:
+
+1. What is the measured bottleneck?
+2. What profile evidence supports that?
+3. Did this improve, regress, or fail versus parent/current best?
+4. What exact next experiment follows from the evidence?
 
 When relevant, connect the decision to the actual GPU architecture: data layout,
 memory movement, tensor/memory instructions, synchronization, launch overhead,
