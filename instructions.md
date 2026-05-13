@@ -198,6 +198,14 @@ choose the next experiment from that evidence. Include only the detailed profile
 metrics that are available and relevant; the concrete checklist belongs in the
 note template below.
 
+Before writing that decision, read the complete
+`$EXPERIMENT_DIR/ncu/details.txt` from top to bottom. Targeted `grep`/`rg`
+queries, scripts, or summaries are useful follow-ups, but they are not a
+substitute for reading the full NCU details page. Nsight Compute warnings and
+recommendations are profile evidence: consider them, then either use them to
+choose an experiment or explicitly explain why they are not the right next
+lever in `note.md`.
+
 If the NCU output is missing the metric needed for a decision, say what is
 missing and gather it with NCU, `nsys`, a microbench, PTX/SASS inspection, or a
 focused debug run before making the design claim.
@@ -481,8 +489,10 @@ profiling permissions or tools are missing, treat the environment as blocked:
 the experiment is not fully usable for design decisions until NCU succeeds.
 
 Immediately after profiling, write the profile-driven decision in `note.md`. Do
-not move to the next edit until the note states the measured limiter, the
-evidence for it, and the next decision that follows from it.
+not move to the next edit until you have read the full
+`$EXPERIMENT_DIR/ncu/details.txt` and the note states the measured limiter, the
+evidence for it, profiler recommendations considered, and the next decision
+that follows from it.
 
 ### 8. Compute Speedup And Status
 
@@ -557,6 +567,14 @@ and why no operator work was precomputed into the inputs.
 Paste the four validate.py metrics and summarize whether latency improved versus parent/current best.
 
 ## NCU Profile
+Full details read: yes. State that you read the complete
+`$EXPERIMENT_DIR/ncu/details.txt` before making this decision.
+
+Profiler warnings/recommendations considered: summarize the relevant Nsight
+Compute warnings, recommendations, and speedup estimates. For each important
+recommendation, say whether it motivates the next experiment or why it is being
+discarded for now.
+
 Summarize the profile path and decisive Nsight Compute facts. Do not paste only
 raw duration. Include only metrics that are available and relevant: total
 profiled duration, kernel count, one-dominant-kernel vs many-small-kernels
