@@ -40,17 +40,17 @@ Do not commit `results/` to git. Leave it untracked.
 
 ### Optional Example Implementations
 
-The `examples/` directory contains other implementations that agents may inspect
-for API and semantic context.
+The `examples/` directory contains implementations that agents may inspect for
+API, semantic, and implementation inspiration.
 
 These files are not the evaluator and are not the correctness source of truth.
 `reference.py` and `validate.py` define the task contract.
 
-Feel free to take inspiration from examples: API conventions, edge-case
-handling, supported shapes, dtype behavior, data layout choices, and useful
-implementation tradeoffs. Adapt ideas when they help the measured task, and
-explain the influence in the experiment note. `reference.py` and `validate.py`
-remain the final authority for correctness.
+Feel free to borrow implementation ideas from examples: API conventions,
+edge-case handling, supported shapes, dtype behavior, data layouts, code
+structure, useful tradeoffs, and possible interface variants. Adapt ideas when
+they help the measured task, and explain the influence in the experiment note.
+`reference.py` and `validate.py` remain the final authority for correctness.
 
 ## Submission Integrity
 
@@ -263,13 +263,16 @@ Input and representation reformulations are also in scope when they are
 mathematically honest and do not hide the same work outside the measured path.
 It is acceptable to ask whether the reference contract can be expressed with a
 more kernel-friendly equivalent representation, or with metadata that a real
-upstream caller would naturally already have. For example, `bos_mask` is a
-boolean start-marker representation such as `[1, 0, 0, 1, 0]`, while `seq_idx`
-is an explicit sequence id per token such as `[0, 0, 0, 1, 1]`. For causal conv,
-both prevent looking back across sequence boundaries, but `seq_idx` can turn a
-boundary-crossing check into `seq_idx[t] == seq_idx[t - lag]` instead of
-prefix/cumsum-style logic over `bos_mask`. Treat this kind of input change as a
-mathematical/data-model reformulation, not as evaluator manipulation.
+upstream caller would naturally already have. Examples from examples/ may provide useful ideas
+for these alternate interfaces, but the variant must still preserve the same
+semantic workload and be recorded as an `interface_variant`. For example,
+`bos_mask` is a boolean start-marker representation such as `[1, 0, 0, 1, 0]`,
+while `seq_idx` is an explicit sequence id per token such as `[0, 0, 0, 1, 1]`.
+For causal conv, both prevent looking back across sequence boundaries, but
+`seq_idx` can turn a boundary-crossing check into
+`seq_idx[t] == seq_idx[t - lag]` instead of prefix/cumsum-style logic over
+`bos_mask`. Treat this kind of input change as a mathematical/data-model
+reformulation, not as evaluator manipulation.
 
 Deliberate input/interface reformulations may update `validate.py` and
 `reference.py`. Keep those updates minimal: preserve the same stress shape,
