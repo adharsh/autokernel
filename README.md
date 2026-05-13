@@ -179,6 +179,7 @@ Human-only step.
 
 ```bash
 ./scripts/agents.sh status
+watch -n 5 ./scripts/agents.sh status # poll status
 ./scripts/agents.sh stop
 ./scripts/agents.sh resume
 ./scripts/agents.sh resume a3 a7
