@@ -181,12 +181,16 @@ Human-only step.
 ./scripts/agents.sh status
 ./scripts/agents.sh stop
 ./scripts/agents.sh resume
+./scripts/agents.sh resume a3 a7
 tail -F results/logs/agent0.log
 uv run python scripts/format_results.py --sort agent
 uv run python analysis.py
 ```
 
 Analysis outputs are written under `results/`.
+`resume` keeps tracked agents whose PIDs are still alive on the current node and
+restarts only dead tracked agents. Pass agent IDs to limit resume to a known
+subset.
 Agents append through `scripts/record_result.py`, which uses file locking and
 the shared root `results/experiments.tsv`. Worktree `results/` paths are
 symlinked to the root results directory when agents launch. Crash rows are still

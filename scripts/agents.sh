@@ -5,7 +5,8 @@ set -euo pipefail
 # Usage:
 #   ./scripts/agents.sh start    # fresh start, one agent per GPU
 #   ./scripts/agents.sh stop     # kill all running agents
-#   ./scripts/agents.sh resume   # fresh conversations for existing agent worktrees
+#   ./scripts/agents.sh resume   # fresh conversations for dead existing agents
+#   ./scripts/agents.sh resume a3 a7
 #   ./scripts/agents.sh status   # show which agents are alive
 #   AGENT_CLI=claude ./scripts/agents.sh start
 
@@ -50,6 +51,37 @@ _parse_pid_line() {
   local line="$1"
   _agent_id="${line%%:*}"
   _pid="${line#*:}"
+}
+
+_write_pid_file() {
+  local tmp
+  tmp=$(mktemp "${PID_FILE}.XXXXXX")
+  printf "%s\n" "$@" > "$tmp"
+  mv "$tmp" "$PID_FILE"
+}
+
+_normalize_agent_arg() {
+  local arg="$1"
+  if [[ "$arg" =~ ^a[0-9]+$ ]]; then
+    printf "%s\n" "${arg#a}"
+  elif [[ "$arg" =~ ^[0-9]+$ ]]; then
+    printf "%s\n" "$arg"
+  else
+    echo "Invalid agent id '$arg'. Use a number or a-prefixed id, for example 3 or a3." >&2
+    exit 1
+  fi
+}
+
+_agent_id_in_list() {
+  local needle="$1"
+  shift
+  local item
+  for item in "$@"; do
+    if [ "$item" = "$needle" ]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 _normalize_agent_cli() {
@@ -371,22 +403,78 @@ cmd_resume() {
     exit 1
   fi
 
+  local target_ids=()
+  local target
+  for target in "$@"; do
+    target_ids+=("$(_normalize_agent_arg "$target")")
+  done
+
   local agent_ids=()
-  local worktrees=()
+  local pids=()
+  local pid_lines=()
+  local gpu_ids=()
   local line
+  local gpu_id=0
   while read -r line; do
     [ -n "$line" ] || continue
     _parse_pid_line "$line"
     agent_ids+=("$_agent_id")
+    pids+=("$_pid")
+    pid_lines+=("$line")
+    gpu_ids+=("$gpu_id")
+    gpu_id=$((gpu_id + 1))
   done < "$PID_FILE"
+
+  for target in "${target_ids[@]}"; do
+    if ! _agent_id_in_list "$target" "${agent_ids[@]}"; then
+      echo "Agent a${target} is not tracked in $PID_FILE." >&2
+      exit 1
+    fi
+  done
+
+  local restart_indexes=()
+  local idx
+  local selected
+  for idx in "${!agent_ids[@]}"; do
+    selected=0
+    if [ "${#target_ids[@]}" -eq 0 ] || _agent_id_in_list "${agent_ids[$idx]}" "${target_ids[@]}"; then
+      selected=1
+    fi
+
+    if [ "$selected" -eq 0 ]; then
+      continue
+    fi
+
+    if kill -0 "${pids[$idx]}" 2>/dev/null; then
+      echo "Keeping a${agent_ids[$idx]} running at PID ${pids[$idx]}."
+    else
+      restart_indexes+=("$idx")
+    fi
+  done
+
+  if [ "${#restart_indexes[@]}" -eq 0 ]; then
+    if [ "${#target_ids[@]}" -eq 0 ]; then
+      echo "No dead tracked agents found on this node."
+    else
+      echo "No selected tracked agents need restart on this node."
+    fi
+    return
+  fi
 
   NUM_GPUS=$(_detect_num_gpus)
   echo "Detected $NUM_GPUS GPU(s)"
   echo "Agent CLI: $AGENT_CLI ($(_agent_command))"
   echo "Agent settings: $(_agent_model_summary)"
-  echo "Resuming agents from previous sessions..."
-  if [ "${#agent_ids[@]}" -gt "$NUM_GPUS" ]; then
-    echo "Cannot resume ${#agent_ids[@]} agent(s) with only $NUM_GPUS GPU(s) detected." >&2
+  echo "Resuming ${#restart_indexes[@]} dead agent(s) from previous sessions..."
+  for idx in "${restart_indexes[@]}"; do
+    if [ "${gpu_ids[$idx]}" -ge "$NUM_GPUS" ]; then
+      echo "Cannot resume a${agent_ids[$idx]} on original GPU ${gpu_ids[$idx]} with only $NUM_GPUS GPU(s) detected." >&2
+      echo "Run targeted resume on a node with the matching GPU slot, or edit $PID_FILE intentionally." >&2
+      exit 1
+    fi
+  done
+  if [ "${#restart_indexes[@]}" -gt "$NUM_GPUS" ]; then
+    echo "Cannot resume ${#restart_indexes[@]} agent(s) with only $NUM_GPUS GPU(s) detected." >&2
     exit 1
   fi
   _check_task_files
@@ -395,32 +483,30 @@ cmd_resume() {
   _init_results_tsv
   mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
 
-  for AGENT_ID in "${agent_ids[@]}"; do
+  for idx in "${restart_indexes[@]}"; do
+    AGENT_ID=${agent_ids[$idx]}
     WORKTREE=$(_agent_worktree_path "$AGENT_ID")
     _prepare_worktree_results_link "$WORKTREE"
-    worktrees+=("$WORKTREE")
   done
 
-  echo "Stopping currently tracked agent processes before fresh resume..."
-  cmd_stop
-  : > "$PID_FILE"
-
-  for GPU_ID in "${!agent_ids[@]}"; do
-    AGENT_ID=${agent_ids[$GPU_ID]}
-    WORKTREE=${worktrees[$GPU_ID]}
+  for idx in "${restart_indexes[@]}"; do
+    AGENT_ID=${agent_ids[$idx]}
+    GPU_ID=${gpu_ids[$idx]}
+    WORKTREE=$(_agent_worktree_path "$AGENT_ID")
 
     LOG="$LOGS_DIR/agent${AGENT_ID}.log"
-    echo "Starting fresh conversation for agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
+    echo "Starting fresh conversation for dead agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
     _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
       "You are agent $AGENT_ID in a fresh conversation. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Do not rely on prior chat state. Treat disk artifacts as the source of truth: read and follow $ROOT/instructions.md, inspect the current git branch/status/log in $WORKTREE, read $TSV, and read relevant experiment notes under $EXPERIMENTS_DIR, especially this agent's a${AGENT_ID}_* notes and the best keep rows from the TSV. Use that provenance to identify any interrupted work, the next unused a${AGENT_ID}/N experiment id, and the strongest current parent/result to build from. Do not assume you must continue this agent's previous branch if the TSV and notes show a better global parent; choose the next experiment from the durable evidence. If you find an interrupted experiment, inspect its branch, files, run logs, NCU outputs, and note before deciding whether to finish, record, discard, or branch from the latest stronger result. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels. After each profile, you MUST read the complete experiment ncu/details.txt from top to bottom; targeted greps/summaries are allowed only after the full read, not instead of it. The profiler's warnings and recommendations are evidence: consider them, then either act on them or explicitly discard them with a reason in note.md. After each profile, write note.md with the measured bottleneck, profile evidence, speed-of-light interpretation when relevant, profiler recommendations considered, and next experiment chosen from that evidence. Do not move on with a shallow note. Record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, use the full profiling details to try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Resume the experiment loop now. Never stop. Never ask the user anything."
 
-    echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
+    pid_lines[$idx]="$AGENT_ID:$_agent_pid"
+    _write_pid_file "${pid_lines[@]}"
     echo "  PID $_agent_pid"
   done
 
   echo ""
-  echo "All agents resumed with fresh conversations. Monitor with:"
+  echo "Restarted ${#restart_indexes[@]} dead agent(s). Monitor with:"
   echo "  ./scripts/agents.sh status"
 }
 
@@ -431,10 +517,10 @@ cmd_resume() {
 case "${1:-}" in
   start)  cmd_start ;;
   stop)   cmd_stop ;;
-  resume) cmd_resume ;;
+  resume) shift; cmd_resume "$@" ;;
   status) cmd_status ;;
   *)
-    echo "Usage: ./scripts/agents.sh {start|stop|resume|status}"
+    echo "Usage: ./scripts/agents.sh {start|stop|status|resume [agent_id ...]}"
     exit 1
     ;;
 esac
