@@ -338,6 +338,22 @@ cmd_status() {
 }
 
 cmd_start() {
+  if [ -f "$PID_FILE" ]; then
+    echo "Existing agent state found: $PID_FILE"
+    echo "Running start will stop tracked agents if any are alive, then launch a new agent generation."
+    echo "If you meant to continue stopped agents, run: ./scripts/agents.sh resume"
+    printf "Type yes to proceed with start: "
+    if ! read -r confirm; then
+      echo ""
+      echo "Aborted start."
+      exit 1
+    fi
+    if [ "$confirm" != "yes" ]; then
+      echo "Aborted start."
+      exit 1
+    fi
+  fi
+
   _require_agent_cli
 
   if [ -f "$PID_FILE" ]; then
