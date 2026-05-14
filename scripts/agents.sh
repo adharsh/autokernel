@@ -416,11 +416,14 @@ cmd_start() {
   done
 
   echo ""
-  echo "All agents launched. Monitor with:"
+  echo "All agents launched."
+  echo "Monitor with one of these commands:"
   echo "  tail -f $LOGS_DIR/agent*.log"
   echo "  uv run python scripts/format_results.py --sort agent"
-  echo ""
+  echo "  ./scripts/agents.sh watch 60"
   echo "  ./scripts/agents.sh status"
+  echo ""
+  echo "Manage agents with:"
   echo "  ./scripts/agents.sh stop"
   echo "  ./scripts/agents.sh resume"
 }
@@ -536,7 +539,9 @@ cmd_resume() {
   done
 
   echo ""
-  echo "Restarted ${#restart_indexes[@]} dead agent(s). Monitor with:"
+  echo "Restarted ${#restart_indexes[@]} dead agent(s)."
+  echo "Monitor with one of these commands:"
+  echo "  ./scripts/agents.sh watch 60"
   echo "  ./scripts/agents.sh status"
 }
 
