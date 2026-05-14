@@ -338,8 +338,21 @@ cmd_status() {
 }
 
 cmd_start() {
-  if [ -f "$PID_FILE" ]; then
-    echo "Existing agent state found: $PID_FILE"
+  local agent_worktree_count
+  local agent_branch_count
+  local confirm
+
+  agent_worktree_count=$(find "$ROOT" -maxdepth 1 -type d -name 'worktree-a[0-9]*' | wc -l | awk '{ print $1 }')
+  agent_branch_count=$(git branch --list 'a[0-9]*/*' | wc -l | awk '{ print $1 }')
+
+  if [ -f "$PID_FILE" ] || [ "$agent_worktree_count" -gt 0 ] || [ "$agent_branch_count" -gt 0 ]; then
+    if [ -f "$PID_FILE" ]; then
+      echo "Existing agent state found: $PID_FILE"
+    else
+      echo "No $PID_FILE file found, but existing agent state is present."
+    fi
+    echo "Existing agent worktrees: $agent_worktree_count"
+    echo "Existing agent branches: $agent_branch_count"
     echo "Running start will stop tracked agents if any are alive, then launch a new agent generation."
     echo "If you meant to continue stopped agents, run: ./scripts/agents.sh resume"
     printf "Type yes to proceed with start: "
