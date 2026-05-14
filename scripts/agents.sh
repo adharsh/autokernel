@@ -8,6 +8,7 @@ set -euo pipefail
 #   ./scripts/agents.sh resume   # fresh conversations for dead existing agents
 #   ./scripts/agents.sh resume a3 a7
 #   ./scripts/agents.sh status   # show which agents are alive
+#   ./scripts/agents.sh watch 5  # refresh status and resume dead agents every 5 seconds
 #   AGENT_CLI=claude ./scripts/agents.sh start
 
 cd "$(dirname "$0")/.."
@@ -510,6 +511,38 @@ cmd_resume() {
   echo "  ./scripts/agents.sh status"
 }
 
+cmd_watch() {
+  local interval="${1:-5}"
+  if [ "$#" -gt 1 ]; then
+    echo "Usage: ./scripts/agents.sh watch [interval_seconds]" >&2
+    exit 1
+  fi
+  if ! [[ "$interval" =~ ^[0-9]+$ ]] || [ "$interval" -le 0 ]; then
+    echo "watch interval must be a positive integer number of seconds." >&2
+    exit 1
+  fi
+
+  trap 'echo ""; echo "watch stopped; agents are still running"; echo "run ./scripts/agents.sh stop to kill agents"; exit 0' INT TERM
+
+  local resume_output
+  while true; do
+    if [ -t 1 ]; then
+      printf '\033[2J\033[H'
+    fi
+    echo "agents watch | interval ${interval} seconds | $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Ctrl+C stops the watcher only. Run ./scripts/agents.sh stop to kill agents."
+    echo ""
+
+    resume_output=$(cmd_resume 2>&1)
+    if [[ "$resume_output" == *"Restarted "* || "$resume_output" == *"Starting fresh conversation"* ]]; then
+      printf "%s\n\n" "$resume_output"
+    fi
+    cmd_status
+
+    sleep "$interval"
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -519,8 +552,9 @@ case "${1:-}" in
   stop)   cmd_stop ;;
   resume) shift; cmd_resume "$@" ;;
   status) cmd_status ;;
+  watch)  shift; cmd_watch "$@" ;;
   *)
-    echo "Usage: ./scripts/agents.sh {start|stop|status|resume [agent_id ...]}"
+    echo "Usage: ./scripts/agents.sh {start|stop|status|resume [agent_id ...]|watch [interval_seconds]}"
     exit 1
     ;;
 esac

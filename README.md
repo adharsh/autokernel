@@ -180,6 +180,7 @@ Human-only step.
 ```bash
 ./scripts/agents.sh status
 watch -n 5 ./scripts/agents.sh status # poll status
+./scripts/agents.sh watch 5 # poll status and resume dead agents every 5 seconds
 ./scripts/agents.sh stop
 ./scripts/agents.sh resume
 ./scripts/agents.sh resume a3 a7
@@ -192,6 +193,8 @@ Analysis outputs are written under `results/`.
 `resume` keeps tracked agents whose PIDs are still alive on the current node and
 restarts only dead tracked agents. Pass agent IDs to limit resume to a known
 subset.
+`watch` runs in the foreground, clears the screen between refreshes, and exits
+on Ctrl+C without stopping agents.
 Agents append through `scripts/record_result.py`, which uses file locking and
 the shared root `results/experiments.tsv`. Worktree `results/` paths are
 symlinked to the root results directory when agents launch. Crash rows are still
