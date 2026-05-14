@@ -433,12 +433,18 @@ explain why restarting from baseline was the cleaner test.
 ### 3. Branch
 
 ```bash
-git checkout -b a{AGENT_ID}/{n} {current_base}
 EXPERIMENT_ID="a${AGENT_ID}/${n}"
+git checkout -b "$EXPERIMENT_ID" "${current_base}"
 SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
 ```
+
+Every experiment must be committed while the current branch name exactly matches
+the value of `$EXPERIMENT_ID`. For example, if `AGENT_ID=7` and `n=172`, the
+branch name is `a7/172`. Do not commit while still on an older experiment branch.
+`record_result.py` also creates/verifies `$EXPERIMENT_ID` at `HEAD` before
+appending the TSV row.
 
 ### 4. Edit
 
@@ -453,12 +459,14 @@ same.
 ### 5. Commit
 
 ```bash
+test "$(git branch --show-current)" = "$EXPERIMENT_ID"
 git add candidate/ && git commit -m "a{AGENT_ID}/{n}: {description}"  # normal candidate-only experiment
 ```
 
 For an input/interface reformulation, also stage the evaluator contract change:
 
 ```bash
+test "$(git branch --show-current)" = "$EXPERIMENT_ID"
 git add candidate/ validate.py reference.py && git commit -m "a{AGENT_ID}/{n}: {description}"
 ```
 

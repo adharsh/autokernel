@@ -122,11 +122,50 @@ def ncu_duration_metrics(text: str, *, status: str) -> tuple[str, str]:
     return f"{total_us:.3f}", str(len(durations))
 
 
-def current_commit() -> str:
+def git_output(*args: str) -> str:
     return subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"],
+        ["git", *args],
         text=True,
     ).strip()
+
+
+def current_commit() -> str:
+    return git_output("rev-parse", "--short", "HEAD")
+
+
+def ensure_experiment_branch(experiment_id: str) -> str:
+    head = git_output("rev-parse", "HEAD")
+    active_branch = git_output("branch", "--show-current")
+    ref = f"refs/heads/{experiment_id}"
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode == 1:
+        subprocess.check_call(["git", "branch", experiment_id, "HEAD"])
+        branch_status = "created"
+    elif result.returncode == 0 and result.stdout.strip() == head:
+        branch_status = "verified"
+    elif result.returncode == 0:
+        raise RuntimeError(
+            f"Experiment branch {experiment_id} points to "
+            f"{result.stdout.strip()[:7]}, but HEAD is {head[:7]}. "
+            "Refusing to move an existing experiment branch."
+        )
+    else:
+        raise RuntimeError(result.stderr.strip() or f"Could not inspect {ref}")
+
+    if active_branch and active_branch != experiment_id:
+        raise RuntimeError(
+            f"Current branch is {active_branch}, but experiment_id is "
+            f"{experiment_id}. Experiment branch was {branch_status} at HEAD; "
+            "switch to it before recording."
+        )
+
+    return branch_status
 
 
 def speedup(reference_us: str, ncu_duration: str) -> str:
@@ -171,6 +210,8 @@ def main() -> None:
     if args.status == "keep" and ncu_us == "nan":
         raise RuntimeError("Refusing to record a keep result without NCU duration")
 
+    branch_status = ensure_experiment_branch(args.experiment_id)
+
     row = {
         "experiment_id": args.experiment_id,
         "parent_id": args.parent_id,
@@ -193,7 +234,7 @@ def main() -> None:
     print(
         f"recorded {row['experiment_id']} status={row['status']} "
         f"speedup={row['speedup']} interface={row['interface_variant']} "
-        f"tsv={args.tsv}"
+        f"branch={branch_status} tsv={args.tsv}"
     )
 
 
