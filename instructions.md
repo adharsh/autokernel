@@ -38,19 +38,26 @@ Optional timing and metadata overrides:
 
 Do not commit `results/` to git. Leave it untracked.
 
-### Optional Example Implementations
+### Hints And Examples
 
-The `examples/` directory contains implementations that agents may inspect for
-API, semantic, and implementation inspiration.
+The `hints/` directory contains required task-specific context that agents must
+inspect before choosing a hypothesis. Read every file under `hints/`, including
+nested files under `hints/examples/`. It can include human notes, lessons from
+previous runs, suggested research directions, and example implementations.
 
-These files are not the evaluator and are not the correctness source of truth.
-`reference.py` and `validate.py` define the task contract.
+Hint files and examples are not the evaluator and are not the correctness source
+of truth. `reference.py` and `validate.py` define the task contract. Treat hints
+as strategy guidance: useful for avoiding repeated dead ends and noticing
+promising directions, but never permission to change semantics or hide work
+outside the measured path.
 
-Feel free to borrow implementation ideas from examples: API conventions,
-edge-case handling, supported shapes, dtype behavior, data layouts, code
-structure, useful tradeoffs, and possible interface variants. Adapt ideas when
-they help the measured task, and explain the influence in the experiment note.
-`reference.py` and `validate.py` remain the final authority for correctness.
+Feel free to borrow implementation ideas from `hints/examples/`: API
+conventions, edge-case handling, supported shapes, dtype behavior, data layouts,
+code structure, useful tradeoffs, and possible interface variants. Adapt ideas
+when they help the measured task, and explain the influence in the experiment
+note. If a hint materially changes your design, cite the hint file in the note
+and state the concrete idea it motivated. `reference.py` and `validate.py`
+remain the final authority for correctness.
 
 ## Submission Integrity
 
@@ -63,25 +70,33 @@ reference contract.
 
 Legitimate compiler, extension, or autotuning artifact caches are allowed when
 they do not cache final answers or depend on recognizing the validation case.
-Inputs must describe the problem, not solve it. Do not add precomputed
-convolution windows, per-output validity matrices, partial reductions, partial
-outputs, or other operator work as inputs.
+Runtime caches must also be fair for the task semantics: caching immutable model
+state, prepacked constants, or compiled kernels is legitimate only when the real
+workload would have that state available or when the cost is accounted for
+elsewhere. Cross-call caches of mutable inputs, weights, activations, or
+input-derived work are not legitimate unless the task explicitly defines those
+values as stable/prepacked. If warmup populates a cache that the profiled
+invocation then reuses, explain why that is fair for the target workload before
+marking the result `keep`.
+Inputs must describe the problem, not solve it. Do not add precomputed operator
+windows, per-output validity matrices, partial reductions, partial outputs,
+transformed weights/activations, or other operator work as inputs.
 
-## Conv5 Mission: Hopper-Specific Next Level
+## Optimization Mission: Architecture-Specific Next Level
 
 The starting point is already a strong CUDA kernel. The goal for this run is not
 more small generic cleanup; it is to find a new level of performance through
 architecture-specific gains, mathematical reformulation, and research-driven
-ideas. Treat H200/SM90 as the target machine and be willing to rethink the
-algorithm, dataflow, and kernel mapping when profiling supports it.
+ideas. Treat the actual profiled GPU as the target machine and be willing to
+rethink the algorithm, dataflow, and kernel mapping when profiling supports it.
 
-Prioritize experiments that are informed by Hopper architecture, SASS/PTX, and
-current public optimization work. This includes CUDA C++ with inline PTX, direct
-PTX/SASS-guided instruction selection, BF16x2/HFMA2/HADD2 codegen, cache/load
-operators, register allocation controls, warp/CTA dataflow changes, shared
-memory staging, TMA/cp.async-style movement when justified, mbarrier/cluster
-mechanisms when justified, and any relevant Hopper-specific scheduling or memory
-primitive. Crazy low-level ideas are allowed, but each one must still be an
+Prioritize experiments that are informed by the target architecture, SASS/PTX
+when needed, and current public optimization work. Depending on the hardware,
+this can include CUDA C++ with inline PTX, direct PTX/SASS-guided instruction
+selection, packed math codegen, cache/load operators, register allocation
+controls, warp/CTA dataflow changes, shared-memory staging, asynchronous copy or
+TMA-style movement, barriers, clusters, and architecture-specific scheduling or
+memory primitives. Low-level ideas are allowed, but each one must still be an
 honest general implementation and must be justified by profiling or by a
 specific external source.
 
@@ -100,8 +115,8 @@ deserves. Some of the highest-value work may require sitting with the math,
 trying multiple equivalent formulations, inspecting code generation, or testing
 several low-level implementation approaches before the experiment is ready to
 record. Do not rush toward shallow edits just to complete more experiments; one
-careful, well-evidenced mathematical reformulation or Hopper-specific redesign
-is more useful than many cosmetic attempts.
+careful, well-evidenced mathematical reformulation or architecture-specific
+redesign is more useful than many cosmetic attempts.
 
 For long-running or complicated experiments, leave breadcrumbs while you work.
 Store them under `$EXPERIMENT_DIR`, not `candidate/`, unless a file is required
@@ -123,9 +138,9 @@ the available tools.
 Use online research actively. Read current official NVIDIA documentation,
 architecture guides, CUDA/PTX references, Nsight material, relevant arXiv papers,
 engineering blogs, and public GitHub repositories with related high-performance
-CUDA/Hopper kernels. When a source changes the design, cite it in the experiment
-note and state the concrete implementation idea it motivated. Do not cite sources
-that did not affect the design.
+kernels for the task domain and target GPU. When a source changes the design,
+cite it in the experiment note and state the concrete implementation idea it
+motivated. Do not cite sources that did not affect the design.
 
 ### Experiment naming
 
@@ -229,9 +244,9 @@ NCU evidence.
 
 ### Architecture-Specific Optimization
 
-Optimize for the actual hardware being used, not just generic CUDA. For this
-run, assume the important target is Hopper/H200 unless the environment proves
-otherwise. Record the GPU name and compute capability in every note.
+Optimize for the actual hardware being used, not just generic CUDA. Record the
+GPU name and compute capability in every note, and use any task hint files to
+understand which hardware target matters most for the current benchmark.
 
 Think from first principles about how the algorithm should map to this
 architecture: data layout, data movement, tiling, thread/warp/CTA ownership,
@@ -239,13 +254,14 @@ memory hierarchy, execution units, register/shared-memory pressure, occupancy,
 synchronization, and launch/runtime overhead. It is acceptable, and often
 necessary, to change the algorithm or data organization to fit the platform.
 
-When profiling identifies a limiter, actively ask whether Hopper offers a better
-dataflow, primitive, instruction family, memory path, launch mode, or
-synchronization mechanism for that limiter. Consider WGMMA, TMA/cp.async-style
-staging, mbarrier, setmaxnreg, CTA clusters/DSM, BF16x2/HFMA2/HADD2 packed math,
-cache operators, inline PTX, and SASS-guided scheduling. Use one only when it is
-connected to the measured limiter or to a concrete external-source idea. Do not
-force a Hopper feature just because it exists.
+When profiling identifies a limiter, actively ask whether the target GPU offers
+a better dataflow, primitive, instruction family, memory path, launch mode, or
+synchronization mechanism for that limiter. Depending on the architecture,
+consider tensor-core instruction families, asynchronous copy/TMA-style staging,
+barriers, register controls, clusters/DSM, packed math, cache operators, inline
+PTX, and SASS-guided scheduling. Use one only when it is connected to the
+measured limiter or to a concrete external-source idea. Do not force an
+architecture feature just because it exists.
 
 If you use hardware-specific CUDA/PTX, explain why it fits the profile, guard it
 by architecture when needed, and preserve a correct fallback.
@@ -253,26 +269,24 @@ by architecture when needed, and preserve a correct fallback.
 ### Mathematical Reformulation
 
 Do not assume the current algorithm is final. Search for faster equivalent or
-tolerance-valid formulations of the conv/activation/state update. Good ideas may
-come from numerical analysis, signal processing, recurrence transformations,
-FlashAttention-style IO-aware algorithms, prefix/scan formulations, chunked or
-blocked recurrences, output/state fusion, recomputation-vs-storage tradeoffs,
-and algebraic simplification of BF16/FP32 rounding points.
+tolerance-valid formulations of the algorithm, operator, activation, or state
+update. Good ideas may come from numerical analysis, signal processing,
+recurrence transformations, FlashAttention-style IO-aware algorithms,
+prefix/scan formulations, chunked or blocked recurrences, output/state fusion,
+recomputation-vs-storage tradeoffs, and algebraic simplification of floating
+point rounding points.
 
 Input and representation reformulations are also in scope when they are
 mathematically honest and do not hide the same work outside the measured path.
 It is acceptable to ask whether the reference contract can be expressed with a
 more kernel-friendly equivalent representation, or with metadata that a real
-upstream caller would naturally already have. Examples from examples/ may provide useful ideas
-for these alternate interfaces, but the variant must still preserve the same
-semantic workload and be recorded as an `interface_variant`. For example,
-`bos_mask` is a boolean start-marker representation such as `[1, 0, 0, 1, 0]`,
-while `seq_idx` is an explicit sequence id per token such as `[0, 0, 0, 1, 1]`.
-For causal conv, both prevent looking back across sequence boundaries, but
-`seq_idx` can turn a boundary-crossing check into
-`seq_idx[t] == seq_idx[t - lag]` instead of prefix/cumsum-style logic over
-`bos_mask`. Treat this kind of input change as a mathematical/data-model
-reformulation, not as evaluator manipulation.
+upstream caller would naturally already have. `hints/examples/` may provide
+useful ideas for these alternate interfaces, but the variant must still preserve
+the same semantic workload and be recorded as an `interface_variant`. Examples
+include compact offsets instead of redundant masks, a declared packed layout
+instead of a dense layout plus conversion, or sequence/group metadata that a
+real caller would naturally have. Treat this kind of input change as a
+mathematical/data-model reformulation, not as evaluator manipulation.
 
 Deliberate input/interface reformulations may update `validate.py` and
 `reference.py`. Keep those updates minimal: preserve the same stress shape,
@@ -327,7 +341,7 @@ arXiv papers, vendor/engineering blog posts, numerical-analysis references, and
 public GitHub repositories with related high-performance kernels. Relevant work
 can include FlashAttention, selective scan/state-space kernels, fused recurrence
 kernels, persistent kernels, CUTLASS/CuTe examples, Triton/CUDA blogs, and
-repository code that demonstrates useful Hopper dataflow or math
+repository code that demonstrates useful target-GPU dataflow or math
 transformations. Also mine high-performance DSL and research-kernel repos for
 ideas, including DeepSeek TileKernels, DeepSeek DeepGEMM, TileLang, Gluon/TLX,
 Helion, cuTile/TileIR, ThunderKittens, and similar projects. Look for algorithms,
@@ -393,27 +407,32 @@ Before choosing a hypothesis, inspect the shared experiment memory:
 ```bash
 tail -n 40 "$AUTOKERNEL_EXPERIMENTS_TSV"
 find "$AUTOKERNEL_EXPERIMENTS_DIR" -maxdepth 2 -name note.md | sort | tail -n 12
+find hints -type f 2>/dev/null | sort
 ```
 
-Read notes for recent experiments, best kept experiments, and similar failed ideas. Avoid repeating changes that already failed unless you can explain what is different.
+Read notes for recent experiments, best kept experiments, and similar failed
+ideas. Also read every file listed under `hints/`, including nested
+`hints/examples/` files when examples exist. Avoid repeating changes that
+already failed unless you can explain what is different.
 
 ### 2. Hypothesize
 
 Before picking a change, do a short architecture/research pass:
 
 - State the latest NCU limiter in one sentence.
-- State which Hopper/H200-specific mechanisms appear relevant or irrelevant and
+- State which target-GPU-specific mechanisms appear relevant or irrelevant and
   why.
 - State whether a mathematical reformulation, IO-aware dataflow, recurrence
   transformation, or numerical approximation could attack the limiter.
-- If the next idea came from a paper, blog, doc, or GitHub repo, record the
-  source and the concrete idea.
+- If the next idea came from a hint file, paper, blog, doc, or GitHub repo,
+  record the source and the concrete idea.
 
-Then pick ONE focused change. Prefer Hopper/H200-specific, SASS/PTX-guided, or
+Then pick ONE focused change. Prefer target-GPU-specific, SASS/PTX-guided, or
 math/research-inspired changes over generic cleanup when the profile supports
-them. Write the change down as a short description (e.g., "force bf16x2 add
-schedule", "try TMA staging for reused weights", "inline PTX cache hint for hot
-weights", "online state update to reduce stores", "reformulate SiLU sequence").
+them. Write the change down as a short description (e.g., "force packed-math
+schedule", "try async staging for reused weights", "inline PTX cache hint for
+hot weights", "online state update to reduce stores", "reformulate activation
+sequence").
 If the change deliberately changes the input/API representation, also set a
 short `INTERFACE_VARIANT` such as `seq_idx`, `cu_seqlens`, or `packed_layout`;
 otherwise keep the current variant.
@@ -557,12 +576,12 @@ Interface Variant: {INTERFACE_VARIANT}
 
 ## Hypothesis
 What you expected to improve and why. Include the parent/current-best NCU
-limiter that motivated the experiment and the Hopper/H200-specific reasoning.
+limiter that motivated the experiment and the target-GPU-specific reasoning.
 
 ## Architecture / Research Review
-State which Hopper/H200 mechanism, mathematical reformulation, or external source
-influenced this experiment. If none applies, say why and cite the profiling
-evidence that ruled it out.
+State which target-GPU mechanism, mathematical reformulation, hint file, or
+external source influenced this experiment. If none applies, say why and cite
+the profiling evidence that ruled it out.
 
 ## Change
 What files/code paths changed. Include key parameters such as tile sizes, warps, stages, vector widths, backend, and fast-path guards.
@@ -665,7 +684,7 @@ If you run out of ideas: re-read recent NCU reports and notes first. Then use
 online papers/blogs/repos for the measured bottleneck, try mathematical
 reformulations, try combining previous near-misses, or try a radically different
 backend. If you feel stuck, think harder -- re-read the kernel code, try a
-fundamentally different Hopper-oriented algorithm, use lower-level
+fundamentally different architecture-oriented algorithm, use lower-level
 CUDA/Triton/PTX mechanisms, including inline PTX when justified, or switch
 backends entirely. Anchor every attempt in profiling and correctness. A slower
 or failed experiment is still useful evidence: document the bottleneck, the
@@ -675,7 +694,7 @@ implementation attempt, why it failed or regressed, and continue.
 
 Do not reject a complicated idea just because it is complicated. This run is
 allowed to spend experiments on substantial algorithmic, mathematical, or
-Hopper-specific redesigns when they have a plausible path to a large speedup.
+architecture-specific redesigns when they have a plausible path to a large speedup.
 The cost of complexity should be justified by evidence: a measured limiter, a
 clear mathematical transformation, or a concrete idea from a paper/blog/repo.
 Small cleanup-only changes are lower priority unless they directly test a
