@@ -73,7 +73,7 @@ Populate these files only after `./scripts/setup.sh --sync --verify` completes:
 | File | Purpose |
 |------|---------|
 | `reference.py` | Trusted ground-truth implementation exposed as `kernel_fn`. |
-| `validate.py` | Correctness, timing, and input test cases. Normally fixed after task setup. |
+| `validate.py` | Correctness, calibrated reference timing metadata, and input test cases. Normally fixed after task setup. |
 | `candidate/interface.py` | Starting optimization entry point exposed as `kernel_fn`. |
 
 Root `reference.py` and `validate.py` are task-specific. Reusable harness policy
@@ -85,6 +85,8 @@ Validation requirements:
 - Define exactly one stress/benchmark case in `validate.py`; this same case is
   used for calibrated reference timing and NCU candidate profiling.
 - Expose that timing case through `validate.make_stress_inputs()`.
+- Do not time candidate implementations inside `validate.py`. Candidate duration
+  must come from the NCU `Duration us` rows produced by `scripts/profile_ncu.sh`.
 - Build separate correctness-only cases for representative shapes and edge
   cases.
 - Compare all returned outputs, including state tensors.
@@ -118,6 +120,8 @@ the calibrated `results/reference_timing.json` value for the printed
 experiments.
 
 Candidate profiling uses `scripts/profile_ncu.sh`, not `validate.py` timing.
+Generated task harnesses must not add CUDA-event timers, wall-clock timers, or
+median timing tables for candidate speed inside `validate.py`.
 Reference calibration profiles one reference invocation after warmup; override
 its warmup with `AUTOKERNEL_REFERENCE_NCU_WARMUP` or
 `scripts/calibrate_reference.py --warmup`. Override the NCU section set with

@@ -5,7 +5,6 @@ set -euo pipefail
 #
 # Usage:
 #   scripts/profile_ncu.sh a0/1
-#   scripts/profile_ncu.sh a0/1 uv run python validate.py
 #
 # Reports are written under results/experiments/<experiment_id>/ncu/ with slashes
 # normalized to underscores. The NCU kernel Duration rows are the source for

@@ -15,6 +15,9 @@ Design contract:
   candidate outputs to reference outputs but do not affect NCU profiling.
 - `reference_us` is loaded from `results/reference_timing.json`, produced by
   `uv run python scripts/calibrate_reference.py`.
+- Do not time candidate implementations in this file. Candidate speed comes from
+  Nsight Compute `Duration us` rows produced by `scripts/profile_ncu.sh`, whose
+  default target is `scripts/profile_candidate_once.py`.
 """
 
 from __future__ import annotations

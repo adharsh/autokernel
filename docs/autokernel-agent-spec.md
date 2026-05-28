@@ -8,7 +8,7 @@ This document specifies the complete autonomous kernel optimization agent system
 
 ```
 autokernel/
-├── validate.py              # Normally fixed correctness + timing harness
+├── validate.py              # Normally fixed correctness + calibrated reference metadata
 ├── reference.py             # Normally fixed reference implementation (ground truth)
 ├── candidate/
 │   ├── __init__.py
@@ -61,6 +61,7 @@ autokernel/
 - `validate.make_stress_inputs()` exposes that exact timing case.
 - `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with a lightweight NCU pass and writes `results/reference_timing.json`.
 - Every `validate.py` run prints the calibrated NCU-based `reference_us`; candidate timing comes from `scripts/profile_ncu.sh`.
+- `validate.py` must not compute candidate duration with CUDA events, wall-clock timers, repeated medians, or other in-harness timing. The official candidate duration is the sum of NCU `Duration us` rows from `scripts/profile_ncu.sh`.
 - Correctness-only cases broaden behavioral coverage but do not change the profiled `ncu_duration_us` timing case.
 - Deliberate input/API reformulations may change `validate.py` and
   `reference.py` together while preserving the same semantic task. Record the
