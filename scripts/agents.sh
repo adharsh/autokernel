@@ -5,6 +5,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/agents.sh start    # fresh start, one agent per GPU
 #   ./scripts/agents.sh stop     # kill all running agents
+#   ./scripts/agents.sh cleanup  # remove old agent worktrees, branches, results, and caches
 #   ./scripts/agents.sh resume   # fresh conversations for dead existing agents
 #   ./scripts/agents.sh resume a3 a7
 #   ./scripts/agents.sh status   # show which agents are alive
@@ -315,6 +316,89 @@ cmd_stop() {
   echo "All agents stopped."
 }
 
+cmd_cleanup() {
+  local assume_yes=0
+  local confirm
+  local worktree
+  local worktrees=()
+  local branches=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -y|--yes)
+        assume_yes=1
+        ;;
+      *)
+        echo "Usage: ./scripts/agents.sh cleanup [--yes]" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  if [ "$assume_yes" -ne 1 ]; then
+    echo "This will remove generated agent state:"
+    echo "  - stop tracked agents from $PID_FILE if present"
+    echo "  - remove worktree-a* git worktrees"
+    echo "  - delete local branches matching a*/*"
+    echo "  - remove results/, .agent_pids, .claude/, and Python/cache directories"
+    echo "  - preserve .venv/"
+    printf "Type cleanup to proceed: "
+    if ! read -r confirm; then
+      echo ""
+      echo "Aborted cleanup."
+      exit 1
+    fi
+    if [ "$confirm" != "cleanup" ]; then
+      echo "Aborted cleanup."
+      exit 1
+    fi
+  fi
+
+  if [ -f "$PID_FILE" ]; then
+    cmd_stop
+  fi
+
+  mapfile -t worktrees < <(find "$ROOT" -maxdepth 1 -type d -name 'worktree-a[0-9]*' -print | sort)
+  if [ "${#worktrees[@]}" -gt 0 ]; then
+    echo "Removing agent worktrees..."
+    for worktree in "${worktrees[@]}"; do
+      echo "  $worktree"
+      if ! git worktree remove --force "$worktree" 2>/dev/null; then
+        rm -rf "$worktree"
+      fi
+    done
+  fi
+  git worktree prune
+
+  mapfile -t branches < <(git branch --format='%(refname:short)' --list 'a[0-9]*/*' | sort)
+  if [ "${#branches[@]}" -gt 0 ]; then
+    echo "Deleting agent branches..."
+    git branch -D "${branches[@]}"
+  fi
+
+  echo "Removing generated results and agent state..."
+  rm -rf "$RESULTS_DIR" "$PID_FILE" "$ROOT/.claude"
+  find "$ROOT" \
+    -path "$ROOT/.venv" -prune -o \
+    \( -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache \) -print \) |
+    while IFS= read -r cache_dir; do
+      rm -rf "$cache_dir"
+    done
+
+  echo "Cleanup complete."
+  echo "Remaining worktrees:"
+  git worktree list
+  local remaining_branches
+  remaining_branches=$(git branch --format='%(refname:short)' --list 'a[0-9]*/*')
+  if [ -n "$remaining_branches" ]; then
+    echo "Remaining agent branches:"
+    printf "%s\n" "$remaining_branches"
+  else
+    echo "Remaining agent branches: none"
+  fi
+}
+
 cmd_status() {
   if [ ! -f "$PID_FILE" ]; then
     echo "No .agent_pids file found. No agents have been launched."
@@ -586,11 +670,12 @@ cmd_watch() {
 case "${1:-}" in
   start)  cmd_start ;;
   stop)   cmd_stop ;;
+  cleanup) shift; cmd_cleanup "$@" ;;
   resume) shift; cmd_resume "$@" ;;
   status) cmd_status ;;
   watch)  shift; cmd_watch "$@" ;;
   *)
-    echo "Usage: ./scripts/agents.sh {start|stop|status|resume [agent_id ...]|watch [interval_seconds]}"
+    echo "Usage: ./scripts/agents.sh {start|stop|cleanup [--yes]|status|resume [agent_id ...]|watch [interval_seconds]}"
     exit 1
     ;;
 esac
