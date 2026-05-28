@@ -2,15 +2,6 @@
 set -euo pipefail
 
 # Manage autonomous kernel-optimization agents.
-# Usage:
-#   ./scripts/agents.sh start    # fresh start, one agent per GPU
-#   ./scripts/agents.sh stop     # kill all running agents
-#   ./scripts/agents.sh cleanup  # remove old agent worktrees, branches, results, and caches
-#   ./scripts/agents.sh resume   # fresh conversations for dead existing agents
-#   ./scripts/agents.sh resume a3 a7
-#   ./scripts/agents.sh status   # show which agents are alive
-#   ./scripts/agents.sh watch 5  # refresh status and resume dead agents every 5 seconds
-#   AGENT_CLI=claude ./scripts/agents.sh start
 
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -46,7 +37,39 @@ CODEX_COMMON_ARGS=(
 )
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Usage
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/agents.sh <command> [args]
+
+Commands:
+  start                    Fresh start, one agent per GPU.
+  stop                     Kill all running tracked agents.
+  cleanup [--yes]          Remove old agent worktrees, branches, results, and caches.
+  resume [agent_id ...]    Fresh conversations for dead tracked agents.
+  status                   Show which tracked agents are alive.
+  watch [seconds]          Refresh status and resume dead agents repeatedly.
+
+Examples:
+  ./scripts/agents.sh start
+  AGENT_CLI=claude ./scripts/agents.sh start
+  ./scripts/agents.sh resume a3 a7
+  ./scripts/agents.sh watch 5
+EOF
+}
+
+_print_monitor_help() {
+  echo "Monitor with one of these commands:"
+  echo "  tail -f $LOGS_DIR/agent*.log"
+  echo "  uv run python scripts/format_results.py --sort agent"
+  echo "  ./scripts/agents.sh watch 60"
+  echo "  ./scripts/agents.sh status"
+}
+
+# ---------------------------------------------------------------------------
+# PID And Argument Helpers
 # ---------------------------------------------------------------------------
 
 # Parse a line from PID_FILE. Format: "AGENT_ID:PID".
@@ -88,6 +111,10 @@ _agent_id_in_list() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Backend Helpers
+# ---------------------------------------------------------------------------
+
 _normalize_agent_cli() {
   case "${AGENT_CLI,,}" in
     claude)
@@ -126,6 +153,10 @@ _require_agent_cli() {
     exit 1
   fi
 }
+
+# ---------------------------------------------------------------------------
+# Host And Results Preconditions
+# ---------------------------------------------------------------------------
 
 _detect_num_gpus() {
   local num_gpus
@@ -169,6 +200,10 @@ _check_reference_calibration() {
   echo "Run: uv run python scripts/calibrate_reference.py" >&2
   exit 1
 }
+
+# ---------------------------------------------------------------------------
+# Worktree Helpers
+# ---------------------------------------------------------------------------
 
 _agent_worktree_path() {
   local agent_id="$1"
@@ -236,6 +271,30 @@ _check_task_files() {
   printf "%s\n" "$dirty" >&2
   echo "Commit or stash validate.py, reference.py, and candidate/ before launching agents so every worktree sees the same task setup." >&2
   exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Launch Helpers
+# ---------------------------------------------------------------------------
+
+_agent_start_prompt() {
+  local agent_id="$1"
+  local worktree="$2"
+  local gpu_id="$3"
+
+  cat <<EOF
+You are agent $agent_id. AGENT_ID=$agent_id, WORKTREE_PATH=$worktree, CUDA_VISIBLE_DEVICES=$gpu_id, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels. After each profile, you MUST read the complete experiment ncu/details.txt from top to bottom; targeted greps/summaries are allowed only after the full read, not instead of it. The profiler's warnings and recommendations are evidence: consider them, then either act on them or explicitly discard them with a reason in note.md. After each profile, write note.md with the measured bottleneck, profile evidence, speed-of-light interpretation when relevant, profiler recommendations considered, and next experiment chosen from that evidence. Do not move on with a shallow note. Record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, use the full profiling details to try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Start the experiment loop now. Never stop. Never ask the user anything.
+EOF
+}
+
+_agent_resume_prompt() {
+  local agent_id="$1"
+  local worktree="$2"
+  local gpu_id="$3"
+
+  cat <<EOF
+You are agent $agent_id in a fresh conversation. AGENT_ID=$agent_id, WORKTREE_PATH=$worktree, CUDA_VISIBLE_DEVICES=$gpu_id, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Do not rely on prior chat state. Treat disk artifacts as the source of truth: read and follow $ROOT/instructions.md, inspect the current git branch/status/log in $worktree, read $TSV, and read relevant experiment notes under $EXPERIMENTS_DIR, especially this agent's a${agent_id}_* notes and the best keep rows from the TSV. Use that provenance to identify any interrupted work, the next unused a${agent_id}/N experiment id, and the strongest current parent/result to build from. Do not assume you must continue this agent's previous branch if the TSV and notes show a better global parent; choose the next experiment from the durable evidence. If you find an interrupted experiment, inspect its branch, files, run logs, NCU outputs, and note before deciding whether to finish, record, discard, or branch from the latest stronger result. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels. After each profile, you MUST read the complete experiment ncu/details.txt from top to bottom; targeted greps/summaries are allowed only after the full read, not instead of it. The profiler's warnings and recommendations are evidence: consider them, then either act on them or explicitly discard them with a reason in note.md. After each profile, write note.md with the measured bottleneck, profile evidence, speed-of-light interpretation when relevant, profiler recommendations considered, and next experiment chosen from that evidence. Do not move on with a shallow note. Record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, use the full profiling details to try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Resume the experiment loop now. Never stop. Never ask the user anything.
+EOF
 }
 
 # Sets: _agent_pid
@@ -318,10 +377,11 @@ cmd_stop() {
 
 cmd_cleanup() {
   local assume_yes=0
+  local branches=()
   local confirm
+  local remaining_branches
   local worktree
   local worktrees=()
-  local branches=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -358,7 +418,6 @@ cmd_cleanup() {
   if [ -f "$PID_FILE" ]; then
     cmd_stop
   fi
-
   mapfile -t worktrees < <(find "$ROOT" -maxdepth 1 -type d -name 'worktree-a[0-9]*' -print | sort)
   if [ "${#worktrees[@]}" -gt 0 ]; then
     echo "Removing agent worktrees..."
@@ -389,7 +448,6 @@ cmd_cleanup() {
   echo "Cleanup complete."
   echo "Remaining worktrees:"
   git worktree list
-  local remaining_branches
   remaining_branches=$(git branch --format='%(refname:short)' --list 'a[0-9]*/*')
   if [ -n "$remaining_branches" ]; then
     echo "Remaining agent branches:"
@@ -467,7 +525,7 @@ cmd_start() {
   _check_reference_calibration
 
   # Find next free agent prefix by checking existing a{N}/{M} branches
-  MAX_PREFIX=$(git branch --list 'a*/*' | grep -oP '(?<=\ba)\d+(?=/)' | sort -n | tail -1 || true)
+  MAX_PREFIX=$(git branch --list 'a[0-9]*/*' | grep -oP '(?<=\ba)\d+(?=/)' | sort -n | tail -1 || true)
   if [ -n "$MAX_PREFIX" ]; then
     PREFIX_OFFSET=$((MAX_PREFIX + 1))
   else
@@ -495,7 +553,7 @@ cmd_start() {
     : > "$LOG"
 
     _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You are agent $AGENT_ID. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Read and follow instructions.md in $ROOT. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every baseline and every experiment that launches kernels. After each profile, you MUST read the complete experiment ncu/details.txt from top to bottom; targeted greps/summaries are allowed only after the full read, not instead of it. The profiler's warnings and recommendations are evidence: consider them, then either act on them or explicitly discard them with a reason in note.md. After each profile, write note.md with the measured bottleneck, profile evidence, speed-of-light interpretation when relevant, profiler recommendations considered, and next experiment chosen from that evidence. Do not move on with a shallow note. Record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, use the full profiling details to try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Start the experiment loop now. Never stop. Never ask the user anything."
+      "$(_agent_start_prompt "$AGENT_ID" "$WORKTREE" "$GPU_ID")"
 
     echo "$AGENT_ID:$_agent_pid" >> "$PID_FILE"
     echo "  PID $_agent_pid"
@@ -503,11 +561,7 @@ cmd_start() {
 
   echo ""
   echo "All agents launched."
-  echo "Monitor with one of these commands:"
-  echo "  tail -f $LOGS_DIR/agent*.log"
-  echo "  uv run python scripts/format_results.py --sort agent"
-  echo "  ./scripts/agents.sh watch 60"
-  echo "  ./scripts/agents.sh status"
+  _print_monitor_help
   echo ""
   echo "Manage agents with:"
   echo "  ./scripts/agents.sh stop"
@@ -617,7 +671,7 @@ cmd_resume() {
     echo "Starting fresh conversation for dead agent a${AGENT_ID} on GPU $GPU_ID → $LOG"
 
     _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
-      "You are agent $AGENT_ID in a fresh conversation. AGENT_ID=$AGENT_ID, WORKTREE_PATH=$WORKTREE, CUDA_VISIBLE_DEVICES=$GPU_ID, AUTOKERNEL_ROOT=$ROOT, AUTOKERNEL_EXPERIMENTS_TSV=$TSV, AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR, AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH. Do not rely on prior chat state. Treat disk artifacts as the source of truth: read and follow $ROOT/instructions.md, inspect the current git branch/status/log in $WORKTREE, read $TSV, and read relevant experiment notes under $EXPERIMENTS_DIR, especially this agent's a${AGENT_ID}_* notes and the best keep rows from the TSV. Use that provenance to identify any interrupted work, the next unused a${AGENT_ID}/N experiment id, and the strongest current parent/result to build from. Do not assume you must continue this agent's previous branch if the TSV and notes show a better global parent; choose the next experiment from the durable evidence. If you find an interrupted experiment, inspect its branch, files, run logs, NCU outputs, and note before deciding whether to finish, record, discard, or branch from the latest stronger result. Required: submit honest general implementations; do not memoize answers, hardcode outputs, special-case tests/benchmarks, detect evaluator behavior, skip correctness paths, or reward-hack. Run scripts/profile_ncu.sh for every resumed experiment that launches kernels. After each profile, you MUST read the complete experiment ncu/details.txt from top to bottom; targeted greps/summaries are allowed only after the full read, not instead of it. The profiler's warnings and recommendations are evidence: consider them, then either act on them or explicitly discard them with a reason in note.md. After each profile, write note.md with the measured bottleneck, profile evidence, speed-of-light interpretation when relevant, profiler recommendations considered, and next experiment chosen from that evidence. Do not move on with a shallow note. Record whether PTX/SASS/codegen was inspected. If no obvious speedup is available, use the full profiling details to try justified lower-level optimizations, including CUDA C++ with inline PTX when appropriate. Resume the experiment loop now. Never stop. Never ask the user anything."
+      "$(_agent_resume_prompt "$AGENT_ID" "$WORKTREE" "$GPU_ID")"
 
     pid_lines[$idx]="$AGENT_ID:$_agent_pid"
     _write_pid_file "${pid_lines[@]}"
@@ -626,9 +680,7 @@ cmd_resume() {
 
   echo ""
   echo "Restarted ${#restart_indexes[@]} dead agent(s)."
-  echo "Monitor with one of these commands:"
-  echo "  ./scripts/agents.sh watch 60"
-  echo "  ./scripts/agents.sh status"
+  _print_monitor_help
 }
 
 cmd_watch() {
@@ -675,7 +727,7 @@ case "${1:-}" in
   status) cmd_status ;;
   watch)  shift; cmd_watch "$@" ;;
   *)
-    echo "Usage: ./scripts/agents.sh {start|stop|cleanup [--yes]|status|resume [agent_id ...]|watch [interval_seconds]}"
+    usage
     exit 1
     ;;
 esac
