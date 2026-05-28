@@ -5,6 +5,20 @@ You are an autonomous kernel optimization agent. You normally modify code inside
 For deliberate input/interface reformulations, you may also update
 `validate.py` and `reference.py` under the rules below. You never stop.
 
+## Critical Run Rules
+
+- Read `hints/README.md` first if present, then every file under `hints/`.
+- A passing speedup is not enough: task hints, fairness constraints, and
+  diagnostic quality decide whether a result is worth promoting.
+- Do not run, profile, record, branch from, or set `best_speedup` from a
+  hint-defined invalid, stale, already-covered, or diagnostic-only family.
+- For FP8 work, state the scale policy before coding. A missing scale policy or
+  a repeat of a known simple static-scale baseline is scratch work, not a real
+  experiment.
+- When `validate.py` prints `stress_quality`, `diagnostic_quality`, or
+  `candidate_diagnostics`, use those rows in `keep`/`discard`, `current_base`,
+  and next-experiment decisions.
+
 ## Setup
 
 Environment variables you receive:
@@ -42,14 +56,22 @@ Do not commit `results/` to git. Leave it untracked.
 
 The `hints/` directory contains required task-specific context that agents must
 inspect before choosing a hypothesis. Read every file under `hints/`, including
-nested files under `hints/examples/`. It can include human notes, lessons from
-previous runs, suggested research directions, and example implementations.
+nested files under `hints/examples/`; if `hints/README.md` exists, read it
+first. It can include human notes, lessons from previous runs, suggested
+research directions, and example implementations.
 
 Hint files and examples are not the evaluator and are not the correctness source
 of truth. `reference.py` and `validate.py` define the task contract. Treat hints
 as strategy guidance: useful for avoiding repeated dead ends and noticing
 promising directions, but never permission to change semantics or hide work
-outside the measured path.
+outside the measured path. When hints define target workload priorities,
+fairness constraints, preferred quality margins, or diagnostic-only baselines,
+use those goals to choose hypotheses and to decide whether a passing speedup is
+worth promoting. Passing `validate.py` is necessary, but it is not a reason to
+ignore a hint-stated training, stability, or production-quality target. If a
+hint marks a result family as historical context or diagnostic-only, do not run
+or record it as an experiment; if one was accidentally started, abandon it as
+scratch and return to the last valid base.
 
 Feel free to borrow implementation ideas from `hints/examples/`: API
 conventions, edge-case handling, supported shapes, dtype behavior, data layouts,
@@ -160,9 +182,16 @@ SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
-scripts/profile_ncu.sh "a${AGENT_ID}/0"
+grep "reference_us\|correctness\|peak_vram_mb\|diagnostic_quality_status" "$EXPERIMENT_DIR/run.log"
+scripts/profile_ncu.sh "a${AGENT_ID}/0" basic
 grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
+NOTE_PATH="$EXPERIMENT_DIR/note.md"
+```
+
+Write a complete baseline note at `$NOTE_PATH` before recording the row. Then
+record the baseline:
+
+```bash
 uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --experiment-id "a${AGENT_ID}/0" \
   --parent-id "-" \
@@ -170,27 +199,27 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --interface-variant "$INTERFACE_VARIANT" \
   --description baseline \
   --run-log "$EXPERIMENT_DIR/run.log"
-NOTE_PATH="$EXPERIMENT_DIR/note.md"
-# Write a detailed baseline note at $NOTE_PATH after recording the row.
 ```
 
-The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before starting the next experiment. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before recording and before starting the next experiment; `record_result.py` rejects missing notes. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`. If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`, use it only for the baseline; do not record another reference wrapper as a non-baseline experiment. If task hints mark a result family as already-covered, diagnostic-only, stale, or not training credible under current diagnostics, exclude that family when setting `current_base` and `best_speedup`.
 
 ## Profiling Ground Truth
 
-Profiling is mandatory and is the ground truth for design decisions. Run an
-extensive Nsight Compute profile for every baseline and every experiment. Do not
-use an unprofiled result to choose the next design, change backend, or declare a
-bottleneck unless the candidate crashed before any kernel could be profiled.
+Profiling is mandatory and is the ground truth for design decisions. Run the
+required explicit Nsight Compute profile for every baseline and every
+recordable experiment. Do not use an unprofiled result to choose the next
+design, change backend, or declare a bottleneck unless the candidate crashed
+before any kernel could be profiled.
 
-Minimum required profile for each experiment:
+The NCU set argument is mandatory. For every recordable experiment, run the
+official `basic` profile first:
 
 ```bash
-scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" basic
 grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
 ```
 
-This runs `ncu --set full --target-processes all` and writes:
+This runs `ncu --set basic --target-processes all` and writes:
 
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.ncu-rep`
 - `results/experiments/a{AGENT_ID}_{n}/ncu/profile.log`
@@ -205,21 +234,53 @@ validation timing loop; it runs
 `scripts/profile_candidate_once.py`, warms up the candidate, then profiles one
 candidate invocation using CUDA profiler start/stop markers.
 
+Use supplemental deeper profiles only when they can change the next decision:
+
+```bash
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" detailed
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" full
+```
+
+Supplemental `detailed` and `full` profiles are written under
+`ncu/detailed/` and `ncu/full/`; they do not replace the official basic timing
+profile consumed by `record_result.py`.
+
+Profile set policy:
+
+- `basic`: required for every baseline and every recordable experiment. Use it
+  for official full-shape speed, kernel count, launch stats, rough speed of
+  light, occupancy, and obvious underfilled-kernel issues.
+- `detailed`: use for every new `keep`, every new kernel family/backend/dataflow,
+  and whenever basic does not explain the bottleneck. This is the preferred
+  escalation because it adds compute workload, memory workload, source counters,
+  and roofline information without the full replay cost.
+- `full`: use only when scheduler, warp-state, instruction-mix, PM-sampling, or
+  other expensive sections are needed for the next hypothesis. Full is not the
+  default for repeated variants of the same kernel family.
+
+If a hypothesis depends on Hopper FP8/WGMMA/TMA/CUTLASS/CuTe codegen, inspect
+PTX/SASS/cubin artifacts in addition to NCU. NCU `full` can show instruction
+statistics, but codegen claims need direct artifact evidence when possible.
+
 ### Profile-Driven Decisions
 
-After each NCU run, write `note.md` before starting the next experiment. The
-note must identify the measured bottleneck, cite the profile evidence, and
-choose the next experiment from that evidence. Include only the detailed profile
-metrics that are available and relevant; the concrete checklist belongs in the
-note template below.
+After each NCU run, create or update `note.md` before starting the next
+experiment. Treat it as a living note for the current experiment: write the
+basic-profile interpretation first, then revise the NCU Profile and Decision
+sections if `detailed` or `full` profiles are run. The final note must identify
+the measured bottleneck, cite the profile evidence, and choose the next
+experiment from that evidence. Include only the detailed profile metrics that
+are available and relevant; the concrete checklist belongs in the note template
+below.
 
-Before writing that decision, read the complete
-`$EXPERIMENT_DIR/ncu/details.txt` from top to bottom. Targeted `grep`/`rg`
-queries, scripts, or summaries are useful follow-ups, but they are not a
-substitute for reading the full NCU details page. Nsight Compute warnings and
-recommendations are profile evidence: consider them, then either use them to
-choose an experiment or explicitly explain why they are not the right next
-lever in `note.md`.
+Before writing that decision, read the complete relevant NCU details file from
+top to bottom: `$EXPERIMENT_DIR/ncu/details.txt` for the required basic profile,
+or `$EXPERIMENT_DIR/ncu/detailed/details.txt` / `$EXPERIMENT_DIR/ncu/full/details.txt`
+for supplemental profiles. Targeted `grep`/`rg` queries, scripts, or summaries
+are useful follow-ups, but they are not a substitute for reading the full NCU
+details page. Nsight Compute warnings and recommendations are profile evidence:
+consider them, then either use them to choose an experiment or explicitly
+explain why they are not the right next lever in `note.md`.
 
 If the NCU output is missing the metric needed for a decision, say what is
 missing and gather it with NCU, `nsys`, a microbench, PTX/SASS inspection, or a
@@ -261,7 +322,10 @@ consider tensor-core instruction families, asynchronous copy/TMA-style staging,
 barriers, register controls, clusters/DSM, packed math, cache operators, inline
 PTX, and SASS-guided scheduling. Use one only when it is connected to the
 measured limiter or to a concrete external-source idea. Do not force an
-architecture feature just because it exists.
+architecture feature just because it exists. Conversely, do not avoid
+Hopper-specific mechanisms for simplicity when the measured limiter requires
+native Hopper FP8, WGMMA, TMA, persistent/grouped scheduling, CUTLASS-3/CuTe,
+PTX, or SASS-guided work to move faster.
 
 If you use hardware-specific CUDA/PTX, explain why it fits the profile, guard it
 by architecture when needed, and preserve a correct fallback.
@@ -432,7 +496,14 @@ math/research-inspired changes over generic cleanup when the profile supports
 them. Write the change down as a short description (e.g., "force packed-math
 schedule", "try async staging for reused weights", "inline PTX cache hint for
 hot weights", "online state update to reduce stores", "reformulate activation
-sequence").
+sequence"). If the task hints require a numerical policy such as FP8 scaling,
+state that policy in the hypothesis before coding. A quantized/FP8 idea without
+the required scale policy is not a valid experiment hypothesis.
+If the hints identify an already-covered scale family, such as a simple static
+FP8 scale baseline, state why the new hypothesis is materially different before
+coding. Repeating a known static-scale baseline is scratch work, not a valid
+experiment.
+
 If the change deliberately changes the input/API representation, also set a
 short `INTERFACE_VARIANT` such as `seq_idx`, `cu_seqlens`, or `packed_layout`;
 otherwise keep the current variant.
@@ -467,7 +538,15 @@ appending the TSV row.
 
 ### 4. Edit
 
-Modify files inside `candidate/`. `interface.py` is the entry point that `validate.py` imports — you can create additional files (`.cu`, `.py`, etc.) as needed. One hypothesis per experiment.
+Modify files inside `candidate/`. `interface.py` is the Python entry point that
+`validate.py` imports — you can create additional files (`.cu`, `.py`, etc.) as
+needed. One hypothesis per experiment.
+
+Before validation or profiling, compare the implementation against the task
+hints. If the hints require scale-aware FP8 or another numerical policy, the
+candidate must implement that policy before it is a real experiment. Do not run
+validation or NCU on a known-invalid scaffold just to get a fast number; revise
+it first or abandon the branch as scratch.
 
 If the hypothesis is a deliberate input/interface reformulation, update
 `validate.py` and `reference.py` together in the same branch. Keep the update
@@ -493,8 +572,13 @@ git add candidate/ validate.py reference.py && git commit -m "a{AGENT_ID}/{n}: {
 
 ```bash
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
+grep "reference_us\|correctness\|peak_vram_mb\|diagnostic_quality_status" "$EXPERIMENT_DIR/run.log"
 ```
+
+If the candidate is known to violate a task-hint validity requirement, such as a
+required scale-aware FP8 policy, do not treat a `PASS` as usable evidence and do
+not profile or record it. Return to the edit step and fix the validity issue
+first.
 
 If `correctness` is not `PASS`, treat it as a blocking implementation bug first.
 Keep fixing the code and amending the experiment commit until correctness passes,
@@ -507,10 +591,10 @@ recording.
 
 ### 7. Profile With NCU
 
-Run the required NCU profile before choosing the next design:
+Run the required official NCU timing profile before choosing the next design:
 
 ```bash
-scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" basic
 ```
 
 If the candidate crashed before launching a kernel, record the crash and say in
@@ -518,11 +602,27 @@ the note that NCU could not profile a kernel. If NCU itself fails because
 profiling permissions or tools are missing, treat the environment as blocked:
 the experiment is not fully usable for design decisions until NCU succeeds.
 
-Immediately after profiling, write the profile-driven decision in `note.md`. Do
-not move to the next edit until you have read the full
-`$EXPERIMENT_DIR/ncu/details.txt` and the note states the measured limiter, the
+Before recording or moving to the next edit, read the full relevant NCU details
+file and make sure the final `note.md` will state the measured limiter, the
 evidence for it, profiler recommendations considered, and the next decision
 that follows from it.
+
+If this is a new `keep`, new kernel family/backend/dataflow, or the basic
+profile does not provide enough evidence for the next hypothesis, also run a
+supplemental profile:
+
+```bash
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" detailed
+# Use full only when scheduler, warp-state, instruction, PM-sampling, or codegen
+# evidence is needed:
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" full
+```
+
+Non-baseline `status=keep` results require the detailed profile before
+recording. `record_result.py` will reject a keep row without
+`$EXPERIMENT_DIR/ncu/detailed/details.txt`. Full profiles are not mandatory for
+every keep; run full only when the detailed profile leaves a scheduler,
+warp-state, instruction-mix, PM-sampling, or codegen question unresolved.
 
 ### 8. Compute Speedup And Status
 
@@ -532,13 +632,37 @@ speedup = reference_us / ncu_duration_us
 
 Decide `status` before recording the row:
 
-- `keep` if `correctness == PASS` and `speedup > best_speedup`
-- `discard` if correctness passed but speedup did not improve
+- `keep` if `correctness == PASS`, `speedup > best_speedup`, the detailed NCU
+  profile exists for this non-baseline keep, diagnostics are not materially
+  worse for the task, and the result is not disqualified by task hints or
+  fairness constraints. `best_speedup` means the best finalized compatible
+  `keep` row already present in the shared TSV, not a pending note or an
+  unrecorded result from another agent.
+- `discard` if correctness passed but comparable speedup did not improve, if
+  diagnostics make the result less training-credible, or if a valid experiment
+  failed to improve. Do not record hint-defined historical, stale,
+  already-covered, or diagnostic-only implementation families as experiment
+  rows.
 - `crash` if validation crashed or did not print usable metrics
+
+Do not prematurely discard a completed `PASS` experiment whose speedup beats the
+best finalized compatible `keep` row in the TSV merely because another agent has
+a faster pending note. Pending notes are useful evidence for the next
+hypothesis, but they are not finalized results. A faster completed `PASS` row
+should be recorded as `keep` after the required detailed profile unless it is
+genuinely disqualified by diagnostics, task hints, or fairness constraints.
+`record_result.py` enforces this and rejects faster-than-best `discard` rows by
+default.
 
 ### 9. Log Result
 
-Append one tab-separated row to `$AUTOKERNEL_EXPERIMENTS_TSV` using:
+Before running this command, finalize
+`$EXPERIMENT_DIR/note.md` using the template in the next section; `record_result.py`
+rejects missing or empty notes. Then append one tab-separated row to
+`$AUTOKERNEL_EXPERIMENTS_TSV` using the command below. Do not
+update existing rows after supplemental profiles; the TSV is append-only and the
+official timing fields always come from the basic profile at
+`$EXPERIMENT_DIR/ncu/details.txt`.
 
 ```bash
 uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
@@ -550,21 +674,32 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --run-log "$EXPERIMENT_DIR/run.log"
 ```
 
-Use this script for every result, including crashes and failed experiments. It parses the experiment `run.log`, reads `ncu/details.txt`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, and do not use `echo >>` for experiment rows.
+Use this script for every result, including crashes and failed experiments. It parses the experiment `run.log`, reads `ncu/details.txt`, computes `speedup`, and uses `profile_utils.append_result` for file-locked writes. Do not write to a worktree-local `results/experiments.tsv`, do not use `echo >>` for experiment rows, and do not mutate earlier rows to reflect later supplemental profiles.
 For `status=crash`, the script still appends a row if the run log is missing
 some or all metrics; missing NCU duration/VRAM values are recorded as `nan` and
 missing correctness is recorded as `CRASH`.
 
-### 10. Write Detailed Note
+### 10. Detailed Note Template
 
-Write one Markdown note after recording the row and before starting the next
+Create or update one Markdown note for every experiment after each profile run,
+then finalize it before recording the row and before starting the next
 experiment:
 
 ```bash
 NOTE_PATH="$EXPERIMENT_DIR/note.md"
 ```
 
-The TSV row is the source of truth and must always be written. The note is shared memory for learning and must be thorough enough for other agents to learn from it. A note that only says what changed and whether it was faster is incomplete; it must analyze the profile and make a design decision from that analysis. Use this format:
+The TSV row is the source of truth for official timing and status, and must
+always be written exactly once. The note is the lineage and shared memory for
+learning: it must exist for every `keep`, `discard`, and `crash`, and it must be
+thorough enough for other agents to learn from it. If an experiment runs
+`basic`, then `detailed`, then `full`, update the same `note.md` after each
+profile so the final note reflects all evidence gathered before the TSV row is
+recorded. After the TSV row is recorded, do not mutate that row to reflect later
+supplemental profiles. A note that only says what changed and whether it was
+faster is incomplete; it must analyze the profile and make a design decision
+from that analysis. `record_result.py` rejects missing or empty notes. Use this
+format:
 
 ```markdown
 # a{AGENT_ID}/{n}: {description}
@@ -577,6 +712,8 @@ Interface Variant: {INTERFACE_VARIANT}
 ## Hypothesis
 What you expected to improve and why. Include the parent/current-best NCU
 limiter that motivated the experiment and the target-GPU-specific reasoning.
+For FP8 experiments, state the exact scale policy and why it is not merely the
+known simple static-scale baseline.
 
 ## Architecture / Research Review
 State which target-GPU mechanism, mathematical reformulation, hint file, or
@@ -594,11 +731,23 @@ is a fair problem description, what changed in `validate.py` and `reference.py`,
 and why no operator work was precomputed into the inputs.
 
 ## Result
-Paste the four validate.py metrics and summarize whether latency improved versus parent/current best.
+Paste the stable validate.py metrics and summarize whether latency improved
+versus parent/current best. If `validate.py` printed `stress_quality`,
+`diagnostic_quality`, or `candidate_diagnostics`, summarize the important rows:
+aggregate quality, near-zero-aware relative error, norm drift, worst-expert
+quality, and any scale/saturation/zero-rate signals. Diagnostic quality rows are
+soft evidence unless they caused `correctness` to fail, but they must still
+inform the design decision for scale-aware FP8 work.
 
 ## NCU Profile
-Full details read: yes. State that you read the complete
-`$EXPERIMENT_DIR/ncu/details.txt` before making this decision.
+Full details read: yes. State which complete details files you read before
+making this decision: `$EXPERIMENT_DIR/ncu/details.txt` for basic and, if run,
+`$EXPERIMENT_DIR/ncu/detailed/details.txt` or
+`$EXPERIMENT_DIR/ncu/full/details.txt`.
+
+Official TSV timing source: basic `ncu/details.txt`. Supplemental profiles:
+list `detailed` and/or `full` paths if run, and state which profile actually
+drove the next decision. Do not update the TSV for supplemental profiles.
 
 Profiler warnings/recommendations considered: summarize the relevant Nsight
 Compute warnings, recommendations, and speedup estimates. For each important
@@ -653,21 +802,41 @@ Concrete next experiments suggested by this result, or what not to try again.
 Columns (tab-separated):
 
 ```
-experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kernel_count  reference_us  speedup  correctness  peak_vram_mb  status  interface_variant  description
+experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kernel_count  reference_us  speedup  correctness  peak_vram_mb  status  interface_variant  description  experiment_elapsed_s
 ```
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
 `reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments. Keep it stable for input-representation changes that preserve the same semantic workload.
 The reported `ncu_duration_us` corresponds to the profiled candidate invocation from `validate.make_stress_inputs()`. `ncu_kernel_count` is the number of NCU kernel Duration rows summed for that invocation. Correctness-only cases are broader coverage and do not affect the reported timing case.
+`experiment_elapsed_s` is wall-clock seconds since this agent's previous recorded row, or since the session start for the agent's first row. It is filled automatically by `record_result.py`.
 
 ### 11. Keep or discard
 
-**If** `correctness == PASS` **and** `speedup > best_speedup`:
+**If** `correctness == PASS`, `speedup > best_speedup`, and the result is worth
+promoting under the task hints and diagnostic-quality evidence:
 - `status = "keep"`, `current_base = "a{AGENT_ID}/{n}"`, `best_speedup = speedup`
 
-**Else** (FAIL, CRASH, or not faster):
+Here `best_speedup` must come from finalized compatible `keep` rows in the
+shared TSV, plus your own finalized `current_base`; do not use pending notes,
+draft notes, partial profiles, or unrecorded rows to suppress a faster completed
+result. If another agent has a faster pending note, mention it in `note.md` and
+use it to plan the next hypothesis, but still record your completed `PASS`
+result as `keep` when it beats the finalized TSV best unless it is genuinely
+disqualified.
+
+**Else** (FAIL, CRASH, not faster than the finalized TSV best, or disqualified
+by hint-stated target, diagnostic-quality evidence, or fairness constraints):
 - `status = "discard"` (or `"crash"`)
 - `git checkout {current_base}`
+
+A discarded or crashed experiment normally should not become the next
+`parent_id`, but its `note.md` should influence the next hypothesis. Choose the
+next experiment from the full durable record: the current parent experiment, the
+latest successful `current_base`, best `keep` rows in the shared TSV, relevant
+notes/logs/profiles from other agents, and the failed/discarded note. The common
+pattern after a failed/discarded child is to branch again from the strongest
+valid parent while using the failed/discarded evidence to avoid repeating the
+same mistake or to test the next natural variant.
 
 ### 12. Repeat
 
