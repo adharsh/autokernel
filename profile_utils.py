@@ -34,6 +34,7 @@ TSV_COLUMNS: list[str] = [
     "status",
     "interface_variant",
     "description",
+    "experiment_elapsed_s",
 ]
 
 _NCU_DURATION_RE = re.compile(
@@ -149,12 +150,13 @@ def read_results(tsv_path: str) -> list[dict]:
         fcntl.flock(f.fileno(), fcntl.LOCK_SH)
         try:
             reader = csv.DictReader(f, delimiter="\t")
-            if reader.fieldnames != TSV_COLUMNS:
-                raise RuntimeError(
-                    f"Unexpected TSV header in {tsv_path}: {reader.fieldnames!r}; "
-                    f"expected {TSV_COLUMNS!r}"
-                )
-            return list(reader)
+            fieldnames = reader.fieldnames or []
+            if fieldnames == TSV_COLUMNS:
+                return list(reader)
+            raise RuntimeError(
+                f"Unexpected TSV header in {tsv_path}: {fieldnames!r}; "
+                f"expected {TSV_COLUMNS!r}"
+            )
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 

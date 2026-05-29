@@ -76,7 +76,7 @@ autokernel/
 
 **Header**:
 ```
-experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description
+experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s
 ```
 
 **Column definitions**:
@@ -87,7 +87,7 @@ experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_cou
 | `parent_id` | string | `a0/0` | Experiment this was built on. `-` for baseline. Enables lineage tree reconstruction |
 | `agent_id` | int | `0` | Which agent ran this |
 | `commit` | string | `a1b2c3d` | 7-char git commit hash |
-| `timestamp` | ISO8601 | `2026-03-20T14:32:00` | When the experiment completed |
+| `timestamp` | ISO8601 | `2026-03-20T14:32:00Z` | When the experiment completed |
 | `ncu_duration_us` | float | `42.3` | Sum of Nsight Compute kernel `Duration us` rows in microseconds |
 | `ncu_kernel_count` | int | `1` | Number of NCU kernel `Duration` rows summed for the profiled invocation |
 | `reference_us` | float | `85.1` | Calibrated reference latency in microseconds for the single stress benchmark case |
@@ -97,6 +97,7 @@ experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_cou
 | `status` | string | `keep` | `keep`, `discard`, or `crash` |
 | `interface_variant` | string | `default` | Input/API representation for this row, e.g. `default`, `seq_idx`, `cu_seqlens`, or `packed_layout` |
 | `description` | string | `fuse norm+proj` | Short description of what was tried |
+| `experiment_elapsed_s` | float | `742` | Wall-clock seconds since this agent's previous recorded row, or since session start for its first row |
 
 `interface_variant` is provenance metadata, not an execution switch. The
 experiment branch/commit is the source of truth for the actual interface and
@@ -635,7 +636,7 @@ def read_results(csv_path: str) -> list[dict]:
 ```bash
 # Initialize results/experiments.tsv with header and create artifact root
 mkdir -p results/experiments
-printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tinterface_variant\tdescription\n' > results/experiments.tsv
+printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\tncu_kernel_count\treference_us\tspeedup\tcorrectness\tpeak_vram_mb\tstatus\tinterface_variant\tdescription\texperiment_elapsed_s\n' > results/experiments.tsv
 
 # Verify reference and validation work. Calibration writes
 # results/reference_timing.json and is intentionally lightweight by default.

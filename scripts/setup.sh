@@ -19,7 +19,7 @@ TEMPLATE_DIR="$ROOT/docs/templates"
 RESULTS_DIR="$ROOT/results"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 TSV="$RESULTS_DIR/experiments.tsv"
-TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description'
+TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s'
 CODEX_HOME=${CODEX_HOME:-"$HOME/.codex"}
 
 DO_SYNC=0
@@ -128,8 +128,34 @@ setup_microbench_links() {
 }
 
 init_results_tsv() {
-  if [ -s "$TSV" ]; then
-    local header
+  local header
+
+  if [ "$DRY_RUN" -ne 0 ]; then
+    if [ -s "$TSV" ]; then
+      header=$(head -n 1 "$TSV")
+      if [ "$header" = "$TSV_HEADER" ]; then
+        echo "ok: $TSV"
+      else
+        echo "results TSV header does not match this run: $TSV" >&2
+        echo "Move or remove the existing results directory before launching." >&2
+        exit 1
+      fi
+    else
+      echo "init: $TSV"
+    fi
+    return
+  fi
+
+  mkdir -p "$RESULTS_DIR"
+  touch "$TSV"
+  {
+    flock -x 9
+    if [ ! -s "$TSV" ]; then
+      echo "init: $TSV"
+      printf "%s\n" "$TSV_HEADER" > "$TSV"
+      return
+    fi
+
     header=$(head -n 1 "$TSV")
     if [ "$header" != "$TSV_HEADER" ]; then
       echo "results TSV header does not match this run: $TSV" >&2
@@ -137,14 +163,7 @@ init_results_tsv() {
       exit 1
     fi
     echo "ok: $TSV"
-    return
-  fi
-
-  echo "init: $TSV"
-  if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$RESULTS_DIR" "$EXPERIMENTS_DIR"
-    printf "%s\n" "$TSV_HEADER" > "$TSV"
-  fi
+  } 9<>"$TSV"
 }
 
 init_experiments_dir() {

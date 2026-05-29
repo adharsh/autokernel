@@ -10,8 +10,9 @@ LOGS_DIR="$RESULTS_DIR/logs"
 TSV="$RESULTS_DIR/experiments.tsv"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 REFERENCE_TIMING_PATH="$RESULTS_DIR/reference_timing.json"
+SESSION_START_FILE="$RESULTS_DIR/session_started_at.txt"
 PID_FILE="$ROOT/.agent_pids"
-TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description'
+TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s'
 
 # Agent backend. AGENT_CLI accepts: claude, codex.
 # "code" is accepted as a codex alias to avoid accidentally invoking VS Code.
@@ -49,7 +50,7 @@ Commands:
   stop                     Kill all running tracked agents.
   cleanup [--yes]          Remove old agent worktrees, branches, results, and caches.
   resume [agent_id ...]    Fresh conversations for dead tracked agents.
-  status                   Show which tracked agents are alive.
+  status                   Show agent liveness, throughput, and last experiment timing.
   watch [seconds]          Refresh status and resume dead agents repeatedly.
 
 Examples:
@@ -177,18 +178,72 @@ _detect_num_gpus() {
 }
 
 _init_results_tsv() {
+  local header
+
   mkdir -p "$RESULTS_DIR"
-  if [ -s "$TSV" ]; then
-    local header
+  touch "$TSV"
+  {
+    flock -x 9
+    if [ ! -s "$TSV" ]; then
+      printf "%s\n" "$TSV_HEADER" > "$TSV"
+      return
+    fi
+
     header=$(head -n 1 "$TSV")
     if [ "$header" != "$TSV_HEADER" ]; then
       echo "results TSV header does not match this run: $TSV" >&2
       echo "Move or remove the existing results directory before launching." >&2
       exit 1
     fi
-  else
-    printf "%s\n" "$TSV_HEADER" > "$TSV"
+  } 9<>"$TSV"
+}
+
+_format_duration() {
+  local raw="${1:-}"
+  if ! [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf "n/a"
+    return
   fi
+  local seconds
+  seconds=$(awk -v value="$raw" 'BEGIN { printf "%d", value + 0.5 }')
+  local days=$((seconds / 86400))
+  local hours=$(((seconds % 86400) / 3600))
+  local minutes=$(((seconds % 3600) / 60))
+  local secs=$((seconds % 60))
+  if [ "$days" -gt 0 ]; then
+    printf "%dd %02dh" "$days" "$hours"
+  elif [ "$hours" -gt 0 ]; then
+    printf "%dh %02dm" "$hours" "$minutes"
+  elif [ "$minutes" -gt 0 ]; then
+    printf "%dm %02ds" "$minutes" "$secs"
+  else
+    printf "%ss" "$secs"
+  fi
+}
+
+_iso_to_epoch() {
+  local iso="$1"
+  date -u -d "$iso" +%s 2>/dev/null || true
+}
+
+_session_start_iso() {
+  if [ -s "$SESSION_START_FILE" ]; then
+    head -n 1 "$SESSION_START_FILE"
+    return
+  fi
+  if [ -s "$TSV" ]; then
+    local first_row_ts
+    first_row_ts=$(awk -F'\t' 'NR == 2 { print $5; exit }' "$TSV")
+    if [ -n "$first_row_ts" ]; then
+      printf "%s\n" "$first_row_ts"
+      return
+    fi
+  fi
+  if [ -e "$PID_FILE" ]; then
+    date -u -d "@$(stat -c %Y "$PID_FILE")" +%Y-%m-%dT%H:%M:%SZ
+    return
+  fi
+  date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
 _check_reference_calibration() {
@@ -465,21 +520,119 @@ cmd_status() {
     echo "No .agent_pids file found. No agents have been launched."
     return
   fi
+  local now_epoch
+  local session_iso
+  local session_epoch
+  local session_age_s
+  local session_age_text
+  local total_rows=0
+  local session_rows=0
+  local session_rate="n/a"
+  local line
+  local state
+  local count
+  local best
+  local last_id
+  local last_elapsed
+  local last_ts
+  local agent_rate
+  local last_seen
+  local last_epoch
+  local since_last
+  now_epoch=$(date -u +%s)
+  session_iso=$(_session_start_iso)
+  session_epoch=$(_iso_to_epoch "$session_iso")
+  if [ -n "$session_epoch" ]; then
+    session_age_s=$((now_epoch - session_epoch))
+    if [ "$session_age_s" -lt 0 ]; then
+      session_age_s=0
+    fi
+    session_age_text=$(_format_duration "$session_age_s")
+  else
+    session_age_s=0
+    session_age_text="n/a"
+  fi
+
+  if [ -f "$TSV" ]; then
+    total_rows=$(awk -F'\t' 'NR > 1 { count++ } END { print count + 0 }' "$TSV" 2>/dev/null)
+    session_rows=$(awk -F'\t' -v start="$session_iso" 'NR > 1 && (start == "" || $5 >= start) { count++ } END { print count + 0 }' "$TSV" 2>/dev/null)
+    if [ "$session_age_s" -gt 0 ]; then
+      session_rate=$(awk -v count="$session_rows" -v seconds="$session_age_s" 'BEGIN { printf "%.2f", count * 3600.0 / seconds }')
+    fi
+  fi
+
   echo ""
+  echo "Session started: $session_iso | age $session_age_text | experiments $session_rows since start ($total_rows total) | rate ${session_rate}/h"
+  echo ""
+  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
+    "agent" "pid" "state" "exp" "exp/h" "last" "last_dur" "last_seen" "best"
+  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
+    "-----" "---" "-----" "---" "-----" "----" "--------" "---------" "----"
   while read -r line; do
+    [ -n "$line" ] || continue
     _parse_pid_line "$line"
     if kill -0 "$_pid" 2>/dev/null; then
       state="running"
     else
       state="dead"
     fi
-    printf "  a%-4s  PID %-8s  %-8s" "$_agent_id" "$_pid" "$state"
+    count=0
+    best="n/a"
+    last_id="-"
+    last_elapsed=""
+    last_ts=""
     if [ -f "$TSV" ]; then
-      count=$(awk -F'\t' -v a="$_agent_id" '$3 == a' "$TSV" 2>/dev/null | wc -l)
-      best=$(awk -F'\t' -v a="$_agent_id" '$3 == a && $12 == "keep" { if ($9+0 > max) max=$9+0 } END { if (max > 0) printf "%.2fx", max; else print "n/a" }' "$TSV" 2>/dev/null)
-      printf "  | %3d experiments | best %s" "$count" "$best"
+      IFS=$'\t' read -r count best last_id last_elapsed last_ts < <(
+        awk -F'\t' -v a="$_agent_id" -v start="$session_iso" '
+          NR > 1 && $3 == a {
+            if ($12 == "keep" && $9 + 0 > best) {
+              best = $9 + 0
+            }
+            if (start == "" || $5 >= start) {
+              count++
+              last_id = $1
+              last_elapsed = $15
+              last_ts = $5
+            }
+          }
+          END {
+            if (best > 0) {
+              best_text = sprintf("%.2fx", best)
+            } else {
+              best_text = "n/a"
+            }
+            if (last_id == "") {
+              last_id = "-"
+            }
+            if (last_elapsed == "") {
+              last_elapsed = "-"
+            }
+            if (last_ts == "") {
+              last_ts = "-"
+            }
+            printf "%d\t%s\t%s\t%s\t%s\n", count + 0, best_text, last_id, last_elapsed, last_ts
+          }
+        ' "$TSV" 2>/dev/null
+      )
     fi
-    echo ""
+    agent_rate="n/a"
+    if [ "$session_age_s" -gt 0 ]; then
+      agent_rate=$(awk -v count="$count" -v seconds="$session_age_s" 'BEGIN { printf "%.2f", count * 3600.0 / seconds }')
+    fi
+    last_seen="n/a"
+    if [ -n "$last_ts" ] && [ "$last_ts" != "-" ]; then
+      last_epoch=$(_iso_to_epoch "$last_ts")
+      if [ -n "$last_epoch" ]; then
+        since_last=$((now_epoch - last_epoch))
+        if [ "$since_last" -lt 0 ]; then
+          since_last=0
+        fi
+        last_seen="$(_format_duration "$since_last") ago"
+      fi
+    fi
+    printf "  a%-5s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
+      "$_agent_id" "$_pid" "$state" "$count" "$agent_rate" "$last_id" \
+      "$(_format_duration "$last_elapsed")" "$last_seen" "$best"
   done < "$PID_FILE"
   echo ""
 }
@@ -538,6 +691,7 @@ cmd_start() {
 
   _init_results_tsv
   mkdir -p "$LOGS_DIR" "$EXPERIMENTS_DIR"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$SESSION_START_FILE"
   : > "$PID_FILE"
 
   for GPU_ID in $(seq 0 $((NUM_GPUS - 1))); do

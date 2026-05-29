@@ -198,8 +198,9 @@ Analysis outputs are written under `results/`.
 `resume` keeps tracked agents whose PIDs are still alive on the current node and
 restarts only dead tracked agents. Pass agent IDs to limit resume to a known
 subset.
-`watch` runs in the foreground, clears the screen between refreshes, and exits
-on Ctrl+C without stopping agents.
+`watch` runs in the foreground, clears the screen between refreshes, shows
+session age, experiment counts, per-agent experiment rate, each agent's last
+recorded experiment time, and exits on Ctrl+C without stopping agents.
 `cleanup` is destructive and prompts before removing generated agent state. Use
 `./scripts/agents.sh cleanup --yes` for non-interactive cleanup. It preserves
 `.venv/`.
@@ -219,9 +220,14 @@ per-experiment folder. `analysis.py` audits this coverage and flags missing
 basic NCU artifacts, missing detailed profiles for non-baseline keeps, and
 notes that are missing the required NCU, speed-of-light, design-decision, or
 codegen/PTX/SASS sections.
+
 Rows include `interface_variant` so input/API reformulations stay visible in the
 shared table. Use `default` for the task's original interface and a short name
 such as `seq_idx` or `packed_layout` for deliberate variants.
+Rows also include `experiment_elapsed_s`, the wall-clock seconds since that
+agent's previous recorded row, or since the session start for its first row.
+This is filled automatically by `scripts/record_result.py` and surfaced by
+`./scripts/agents.sh status` and `./scripts/agents.sh watch`.
 
 `interface_variant` is provenance metadata, not an execution switch; the
 experiment branch/commit remains the source of truth for the actual interface.

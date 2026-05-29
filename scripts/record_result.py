@@ -22,7 +22,12 @@ DEFAULT_TSV = ROOT / "results" / "experiments.tsv"
 DEFAULT_EXPERIMENTS_DIR = ROOT / "results" / "experiments"
 sys.path.insert(0, str(ROOT))
 
-from profile_utils import append_result, init_results_tsv, ncu_duration_rows_us  # noqa: E402
+from profile_utils import (  # noqa: E402
+    append_result,
+    init_results_tsv,
+    ncu_duration_rows_us,
+    read_results,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -253,6 +258,52 @@ def speedup(reference_us: str, ncu_duration: str) -> str:
     return f"{reference / candidate:.6f}"
 
 
+def parse_utc_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+
+
+def session_start_path(tsv_path: Path) -> Path:
+    return tsv_path.parent / "session_started_at.txt"
+
+
+def read_session_start(tsv_path: Path) -> datetime | None:
+    path = session_start_path(tsv_path)
+    try:
+        return parse_utc_timestamp(path.read_text().strip())
+    except FileNotFoundError:
+        return None
+
+
+def experiment_elapsed_s(tsv_path: Path, agent_id: str, now: datetime) -> str:
+    """Wall-clock seconds since this agent's previous row or session start."""
+    session_start = read_session_start(tsv_path)
+    previous: datetime | None = None
+    if tsv_path.exists():
+        for row in read_results(str(tsv_path)):
+            if str(row.get("agent_id", "")) != str(agent_id):
+                continue
+            ts = parse_utc_timestamp(str(row.get("timestamp", "")))
+            if ts is None:
+                continue
+            if session_start is not None and ts < session_start:
+                continue
+            if previous is None or ts > previous:
+                previous = ts
+
+    start = previous or session_start
+    if start is None:
+        return ""
+    elapsed = max(0.0, (now - start).total_seconds())
+    return f"{elapsed:.0f}"
+
+
 def metrics_from_log(text: str, *, status: str) -> dict[str, str]:
     if status == "crash":
         return {
@@ -288,13 +339,15 @@ def main() -> None:
         raise RuntimeError("Refusing to record a keep result without NCU duration")
 
     branch_status = ensure_experiment_branch(args.experiment_id)
+    init_results_tsv(str(args.tsv))
+    now = datetime.now(timezone.utc)
 
     row = {
         "experiment_id": args.experiment_id,
         "parent_id": args.parent_id,
         "agent_id": args.agent_id,
         "commit": current_commit(),
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ncu_duration_us": ncu_us,
         "ncu_kernel_count": ncu_kernel_count,
         "reference_us": metrics["reference_us"],
@@ -304,13 +357,14 @@ def main() -> None:
         "status": args.status,
         "interface_variant": args.interface_variant,
         "description": args.description,
+        "experiment_elapsed_s": experiment_elapsed_s(args.tsv, args.agent_id, now),
     }
 
-    init_results_tsv(str(args.tsv))
     append_result(str(args.tsv), row)
     print(
         f"recorded {row['experiment_id']} status={row['status']} "
         f"speedup={row['speedup']} interface={row['interface_variant']} "
+        f"elapsed_s={row['experiment_elapsed_s']} "
         f"branch={branch_status} tsv={args.tsv}"
     )
 

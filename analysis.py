@@ -63,6 +63,7 @@ def load_results(path: str = "results/experiments.tsv") -> pd.DataFrame | None:
         "speedup",
         "peak_vram_mb",
         "agent_id",
+        "experiment_elapsed_s",
     ):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -209,6 +210,7 @@ def _hover_text(row) -> str:
                        ("correctness", "Correctness"),
                        ("status", "Status"),
                        ("interface_variant", "Interface"),
+                       ("experiment_elapsed_s", "Experiment Time"),
                        ("commit", "Commit"),
                        ("agent_id", "Agent"),
                        ("peak_vram_mb", "VRAM (MB)"),
@@ -224,6 +226,8 @@ def _hover_text(row) -> str:
             parts.append(f"<b>{label}:</b> {int(val)}")
         elif col == "peak_vram_mb" and float(val) > 0:
             parts.append(f"<b>{label}:</b> {float(val):.0f}")
+        elif col == "experiment_elapsed_s":
+            parts.append(f"<b>{label}:</b> {float(val):.0f} s")
         elif col == "agent_id":
             parts.append(f"<b>{label}:</b> a{int(val)}")
         elif col not in (
