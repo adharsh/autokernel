@@ -213,6 +213,11 @@ symlinked to the root results directory when agents launch. Crash rows are still
 recorded even when validation fails before printing metrics; missing NCU
 duration and VRAM fields are written as `nan`, and missing correctness is
 written as `CRASH`.
+The recorder also protects the status semantics: a completed `PASS` row whose
+speedup beats the best finalized compatible `keep` row cannot be recorded as
+`discard` by default. Pending notes or partial profiles from other agents are
+not finalized results; use them for the next hypothesis, not to suppress a
+better completed row.
 
 `results/experiments.tsv` is the compact machine-readable index. Detailed
 experiment memory lives under one folder per experiment, for example

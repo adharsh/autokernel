@@ -218,6 +218,13 @@ for each experiment:
     # if discard/crash: current_base stays the same
 ```
 
+`keep` is decided against finalized compatible `keep` rows already present in
+the shared TSV. Pending notes, partial profiles, and unrecorded results from
+other agents may inform the next hypothesis, but they must not be used to record
+a completed `PASS` experiment as `discard` when its speedup beats the finalized
+TSV best. Such a row should be kept unless diagnostics, task hints, or fairness
+constraints genuinely disqualify it.
+
 **Cross-agent lineage**: If agent 1 adapts code from agent 0's experiment `a0/5`, it sets `parent_id=a0/5`. The lineage tree spans agents naturally.
 
 **Reading another agent's code** (no checkout needed):
@@ -435,7 +442,7 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>" (also stage validate.py/reference.py for interface reformulations)
 6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract calibrated reference_us, correctness, peak_vram_mb
 7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}" basic, then create/update note.md from the profile evidence
-8. Compute speedup = reference_us / ncu_duration_us and decide status; if this is a non-baseline keep, run detailed and update the same note.md
+8. Compute speedup = reference_us / ncu_duration_us and decide status against finalized compatible keep rows in the TSV; if this is a non-baseline keep, run detailed and update the same note.md
 9. Finalize results/experiments/a{id}_{n}/note.md with interface_variant, NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
 10. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base, interface_variant recorded)
 11. If status == "keep":

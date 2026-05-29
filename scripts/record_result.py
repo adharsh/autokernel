@@ -258,6 +258,67 @@ def speedup(reference_us: str, ncu_duration: str) -> str:
     return f"{reference / candidate:.6f}"
 
 
+def finite_float(value: object) -> float | None:
+    try:
+        parsed = float(str(value))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def best_recorded_keep_speedup(tsv_path: Path, interface_variant: str) -> float | None:
+    """Best finalized keep row for this compatible interface variant."""
+    if not tsv_path.exists():
+        return None
+
+    best: float | None = None
+    for row in read_results(str(tsv_path)):
+        if row.get("status") != "keep" or row.get("correctness") != "PASS":
+            continue
+        if str(row.get("interface_variant", "")) != interface_variant:
+            continue
+        row_speedup = finite_float(row.get("speedup"))
+        if row_speedup is None:
+            continue
+        if best is None or row_speedup > best:
+            best = row_speedup
+    return best
+
+
+def require_fast_pass_not_discarded(args: argparse.Namespace, row: dict[str, str]) -> None:
+    if args.status != "discard" or row["correctness"] != "PASS":
+        return
+
+    row_speedup = finite_float(row["speedup"])
+    if row_speedup is None:
+        return
+
+    best_keep = best_recorded_keep_speedup(args.tsv, args.interface_variant)
+    if best_keep is None or row_speedup <= best_keep:
+        return
+
+    if os.environ.get("AUTOKERNEL_ALLOW_FAST_DISCARD", "0") == "1":
+        print(
+            "warning: recording a PASS discard that beats the best recorded keep; "
+            "this should only be used for a genuinely disqualified result explained "
+            "in note.md",
+            file=sys.stderr,
+        )
+        return
+
+    raise RuntimeError(
+        f"Refusing to record {args.experiment_id} as discard: speedup "
+        f"{row_speedup:.6f} beats the best recorded keep for "
+        f"interface_variant={args.interface_variant!r} ({best_keep:.6f}). "
+        "Pending/unrecorded notes are not a valid reason to discard a completed "
+        "PASS speedup. Record it as keep after the required detailed profile, or "
+        "set AUTOKERNEL_ALLOW_FAST_DISCARD=1 only for a genuinely disqualified "
+        "result explained in note.md."
+    )
+
+
 def parse_utc_timestamp(value: str) -> datetime | None:
     if not value:
         return None
@@ -359,6 +420,8 @@ def main() -> None:
         "description": args.description,
         "experiment_elapsed_s": experiment_elapsed_s(args.tsv, args.agent_id, now),
     }
+
+    require_fast_pass_not_discarded(args, row)
 
     append_result(str(args.tsv), row)
     print(
