@@ -118,6 +118,9 @@ reference Duration total, not a full performance analysis.
 the calibrated `results/reference_timing.json` value for the printed
 `reference_us` metric. This keeps speedup reporting stable across agent
 experiments.
+It is fine for the initial `candidate/interface.py` to call
+`reference.kernel_fn` for the baseline. After that baseline is recorded,
+non-baseline experiments should replace it with a real candidate implementation.
 
 Candidate profiling uses `scripts/profile_ncu.sh`, not `validate.py` timing.
 Generated task harnesses must not add CUDA-event timers, wall-clock timers, or

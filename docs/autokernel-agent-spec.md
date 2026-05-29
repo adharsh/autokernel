@@ -668,6 +668,10 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", interface_variant=
 # current_base = "a${AGENT_ID}/0"
 ```
 
+If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`,
+use that wrapper only for the baseline. Non-baseline experiments must make a real
+implementation change; do not record another reference wrapper as `a*/1+`.
+
 ---
 
 ## 12. Reference Implementations for Visualization
