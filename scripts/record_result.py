@@ -295,23 +295,14 @@ def require_fast_pass_not_discarded(args: argparse.Namespace, row: dict[str, str
     if best_keep is None or row_speedup <= best_keep:
         return
 
-    if os.environ.get("AUTOKERNEL_ALLOW_FAST_DISCARD", "0") == "1":
-        print(
-            "warning: recording a PASS discard that beats the best recorded keep; "
-            "this should only be used for a genuinely disqualified result explained "
-            "in note.md",
-            file=sys.stderr,
-        )
-        return
-
     raise RuntimeError(
         f"Refusing to record {args.experiment_id} as discard: speedup "
         f"{row_speedup:.6f} beats the best recorded keep for "
         f"interface_variant={args.interface_variant!r} ({best_keep:.6f}). "
         "Pending/unrecorded notes are not a valid reason to discard a completed "
-        "PASS speedup. Record it as keep after the required detailed profile, or "
-        "set AUTOKERNEL_ALLOW_FAST_DISCARD=1 only for a genuinely disqualified "
-        "result explained in note.md."
+        "PASS speedup. Record it as keep after the required detailed profile, "
+        "or treat genuinely disqualified hint-defined/diagnostic-only work as "
+        "scratch instead of recording it as an experiment row."
     )
 
 
