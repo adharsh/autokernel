@@ -69,6 +69,9 @@ class DiagnosticCase:
     x_scale: float = 1.0
     token_outlier_stride: int = 0
     token_outlier_scale: float = 1.0
+    weight_global_scale: float = 1.0
+    weight_expert_stride: int = 0
+    weight_expert_scale: float = 1.0
     weight_channel_stride: int = 0
     weight_channel_scale: float = 1.0
 
@@ -124,6 +127,9 @@ CORRECTNESS_CASES = (
     ),
 )
 
+# Diagnostic cases are part of the training-forward correctness contract. They
+# are not timed, but they must pass the same aggregate quality gates so static
+# scale shortcuts do not win only on the default random stress distribution.
 DIAGNOSTIC_CASES = (
     DiagnosticCase(
         name="stress_shape_x_scale_4",
@@ -150,6 +156,59 @@ DIAGNOSTIC_CASES = (
             seed=3002,
         ),
         x_scale=0.125,
+    ),
+    DiagnosticCase(
+        name="small_x_scale_16",
+        spec=CaseSpec(
+            name="diag_small_x_scale_16",
+            batch=1,
+            seqlen=1024,
+            model_dim=512,
+            expert_inter_dim=1024,
+            n_local_experts=8,
+            seed=3006,
+        ),
+        x_scale=16.0,
+    ),
+    DiagnosticCase(
+        name="small_weight_global_scale_8",
+        spec=CaseSpec(
+            name="diag_small_weight_global_scale_8",
+            batch=1,
+            seqlen=1024,
+            model_dim=512,
+            expert_inter_dim=1024,
+            n_local_experts=8,
+            seed=3007,
+        ),
+        weight_global_scale=8.0,
+    ),
+    DiagnosticCase(
+        name="small_weight_global_scale_0p125",
+        spec=CaseSpec(
+            name="diag_small_weight_global_scale_0p125",
+            batch=1,
+            seqlen=1024,
+            model_dim=512,
+            expert_inter_dim=1024,
+            n_local_experts=8,
+            seed=3008,
+        ),
+        weight_global_scale=0.125,
+    ),
+    DiagnosticCase(
+        name="small_weight_expert_outliers",
+        spec=CaseSpec(
+            name="diag_small_weight_expert_outliers",
+            batch=1,
+            seqlen=1024,
+            model_dim=512,
+            expert_inter_dim=1024,
+            n_local_experts=8,
+            seed=3009,
+        ),
+        weight_expert_stride=2,
+        weight_expert_scale=8.0,
     ),
     DiagnosticCase(
         name="small_token_outliers",
@@ -250,6 +309,14 @@ def make_diagnostic_case(
         x.mul_(case.x_scale)
     if case.token_outlier_stride > 0:
         x[:: case.token_outlier_stride].mul_(case.token_outlier_scale)
+    if case.weight_global_scale != 1.0:
+        w1.mul_(case.weight_global_scale)
+        w3.mul_(case.weight_global_scale)
+        w2.mul_(case.weight_global_scale)
+    if case.weight_expert_stride > 0:
+        w1[:: case.weight_expert_stride].mul_(case.weight_expert_scale)
+        w3[:: case.weight_expert_stride].mul_(case.weight_expert_scale)
+        w2[:: case.weight_expert_stride].mul_(case.weight_expert_scale)
     if case.weight_channel_stride > 0:
         w1[:, :: case.weight_channel_stride, :].mul_(case.weight_channel_scale)
         w3[:, :: case.weight_channel_stride, :].mul_(case.weight_channel_scale)
@@ -365,9 +432,7 @@ def assert_output_contract(candidate: torch.Tensor, reference: torch.Tensor) -> 
         raise AssertionError("candidate output contains non-finite values")
 
 
-def validate_quality(candidate: torch.Tensor, reference: torch.Tensor) -> dict[str, float]:
-    assert_output_contract(candidate, reference)
-    metrics = output_metrics(candidate, reference)
+def quality_failures(metrics: dict[str, float]) -> list[str]:
     failures = []
     if metrics["relative_mae"] > MAX_RELATIVE_MAE:
         failures.append(f"relative_MAE={metrics['relative_mae']:.6g} > {MAX_RELATIVE_MAE}")
@@ -375,6 +440,13 @@ def validate_quality(candidate: torch.Tensor, reference: torch.Tensor) -> dict[s
         failures.append(f"p99_relative_error={metrics['p99_relative_error']:.6g} > {MAX_P99_RELATIVE_ERROR}")
     if metrics["cosine_similarity"] < MIN_COSINE:
         failures.append(f"cosine_similarity={metrics['cosine_similarity']:.8f} < {MIN_COSINE}")
+    return failures
+
+
+def validate_quality(candidate: torch.Tensor, reference: torch.Tensor) -> dict[str, float]:
+    assert_output_contract(candidate, reference)
+    metrics = output_metrics(candidate, reference)
+    failures = quality_failures(metrics)
     if failures:
         raise AssertionError(", ".join(failures))
     return metrics
@@ -515,8 +587,11 @@ def check_diagnostic_quality() -> str:
                 diagnostics = collect_candidate_diagnostics()
                 rows.append((case.name, case.spec.shape_label, metrics))
                 diagnostic_rows.append((case.name, diagnostics))
+                failures = quality_failures(metrics)
                 del args, reference, candidate
                 torch.cuda.empty_cache()
+                if failures:
+                    raise AssertionError(f"{case.name}: {', '.join(failures)}")
         print_quality_table("diagnostic_quality", rows, include_worst_expert=True)
         print_candidate_diagnostics("candidate_diagnostics_diagnostic", diagnostic_rows)
         print("diagnostic_quality_status: PASS")
@@ -645,10 +720,10 @@ def main() -> None:
     correctness = check_correctness()
     reference_us = calibrated_reference_us()
 
-    if correctness == "PASS" and os.environ.get("AUTOKERNEL_SKIP_STRESS_QUALITY") != "1":
+    if correctness == "PASS":
         correctness = check_stress_quality()
 
-    if correctness == "PASS" and os.environ.get("AUTOKERNEL_SKIP_DIAGNOSTIC_QUALITY") != "1":
+    if correctness == "PASS":
         diagnostic_correctness = check_diagnostic_quality()
         if diagnostic_correctness != "PASS":
             correctness = diagnostic_correctness

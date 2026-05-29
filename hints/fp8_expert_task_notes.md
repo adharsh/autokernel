@@ -19,6 +19,25 @@ Keep the public task scoped to Expert forward. Internal FP8 grouped/per-expert
 GEMM helpers are fine, but the measured implementation must compute the complete
 Expert output.
 
+This is still a training-forward task. It is acceptable to optimize only the
+forward pass for now, but the assumptions must match training, not inference:
+weights are mutable across optimizer steps, activation/weight scales must be
+computed or refreshed by a real training policy, and prepacked immutable FP8
+weights are not free inputs to the measured forward.
+
+Do not turn the forward harness into an inference-prepack benchmark. In the
+current harness, a result that consumes prebuilt FP8 weights, pre-expanded scale
+metadata, or fixed activation scales is useful only as diagnostic evidence. It
+can become an official training-forward `keep` only if the human explicitly
+changes the benchmark contract and the refresh/update path and cost are
+measured.
+
+The current benchmark contract does not include a separate refresh/update hook.
+Agents should not add FP8-packed weights, precomputed scales, expanded scale
+metadata, or activation scale state to `validate.py`/`reference.py` as official
+inputs. For now, official training-forward candidates compute that work inside
+the measured `candidate.kernel_fn` invocation.
+
 Why this matters:
 
 - Expert output is the accuracy boundary; FP8 error compounds through two up
@@ -77,11 +96,16 @@ speedup = reference_us / ncu_duration_us
 ```
 
 `validate.py` reports correctness, `reference_us`, peak VRAM, a stress-shape
-quality comparison, and soft `diagnostic_quality` rows for scale robustness.
-Smaller correctness cases cover balanced groups, skewed groups, zero-token
-experts, and medium production-like shapes. Diagnostic quality cases are not the
-official speed benchmark; use them to catch fragile FP8 scaling, outlier
+quality comparison, and `diagnostic_quality` rows for training-forward scale
+robustness. Smaller correctness cases cover balanced groups, skewed groups,
+zero-token experts, and medium production-like shapes. Diagnostic quality cases
+are not the official speed benchmark, but they are correctness evidence: use
+them to catch fragile FP8 scaling, activation/weight magnitude shifts, outlier
 behavior, near-zero relative-error noise, and per-expert regressions.
+Current diagnostic cases include small/large activation scale shifts, global
+small/large weight scale shifts, per-expert weight outliers, token outliers,
+per-channel weight outliers, and skewed groups. These are meant to make static
+scale shortcuts fail early.
 
 ## Implementation Guidance
 

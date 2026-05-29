@@ -2,8 +2,9 @@
 
 The official candidate timing is the sum of Nsight Compute kernel Duration rows
 from the experiment's basic profile at ncu/details.txt. validate.py is still
-used for correctness, reference_us, and peak VRAM. Every recorded experiment
-must already have note.md in its experiment artifact directory.
+used for correctness, reference_us, peak VRAM, and quality diagnostics. Every
+recorded experiment must already have note.md in its experiment artifact
+directory.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Official basic Nsight Compute details.txt path. Defaults to "
             "$AUTOKERNEL_EXPERIMENTS_DIR/<experiment_id>/ncu/details.txt; "
-            "custom paths are rejected unless AUTOKERNEL_ALLOW_CUSTOM_NCU_DETAILS=1."
+            "custom paths are rejected for official TSV timing."
         ),
     )
     parser.add_argument(
@@ -169,9 +170,6 @@ def require_detailed_for_keep(args: argparse.Namespace) -> None:
 
 
 def require_note(args: argparse.Namespace) -> None:
-    if os.environ.get("AUTOKERNEL_REQUIRE_NOTE", "1") == "0":
-        return
-
     note_path = default_note_path(args.experiment_id)
     if not note_path.is_file():
         raise RuntimeError(
@@ -187,8 +185,6 @@ def require_note(args: argparse.Namespace) -> None:
 
 def require_official_basic_details(args: argparse.Namespace) -> None:
     if args.ncu_details is None:
-        return
-    if os.environ.get("AUTOKERNEL_ALLOW_CUSTOM_NCU_DETAILS", "0") == "1":
         return
 
     expected = default_ncu_details_path(args.experiment_id).resolve()
@@ -319,6 +315,74 @@ def require_fast_pass_not_discarded(args: argparse.Namespace, row: dict[str, str
     )
 
 
+def require_training_forward_interface(args: argparse.Namespace) -> None:
+    if args.status != "keep":
+        return
+
+    variant = args.interface_variant.lower()
+    forbidden = (
+        "fp8_weight",
+        "fp8_state",
+        "weight_state",
+        "weight_cache",
+        "weight_scale",
+        "warmup_cache",
+        "runtime_cache",
+        "scale_metadata",
+        "scale_state",
+        "activation_scale",
+        "fixed_scale",
+        "static_scale",
+        "delayed_scale",
+        "xscale",
+        "x_scale",
+        "precompute",
+        "precomputed",
+        "prepack",
+        "prepacked",
+        "maintained",
+        "cached",
+    )
+    matched = [term for term in forbidden if term in variant]
+    if not matched:
+        return
+
+    raise RuntimeError(
+        f"Refusing to record status=keep for interface_variant="
+        f"{args.interface_variant!r}: it looks like prebuilt FP8/scale state "
+        f"({', '.join(matched)}) rather than the current training-forward "
+        "contract. Official keeps must compute FP8 weight/scale work inside "
+        "the measured candidate invocation. If the human changes the benchmark "
+        "contract later, update record_result.py deliberately instead of using "
+        "an environment bypass."
+    )
+
+
+def require_training_quality_evidence(args: argparse.Namespace, text: str) -> None:
+    if args.status != "keep":
+        return
+
+    if "stress_quality:" not in text:
+        raise RuntimeError(
+            "Refusing to record status=keep: run log is missing stress_quality. "
+            "Do not skip stress quality for official keep rows."
+        )
+
+    diagnostic_status = read_metric(
+        text,
+        "diagnostic_quality_status",
+        required=False,
+        default="",
+    )
+    if diagnostic_status != "PASS":
+        found = diagnostic_status or "missing"
+        raise RuntimeError(
+            "Refusing to record status=keep: diagnostic_quality_status must be "
+            f"PASS, got {found!r}. Do not skip diagnostic quality for official "
+            "keep rows."
+        )
+
+
 def parse_utc_timestamp(value: str) -> datetime | None:
     if not value:
         return None
@@ -393,6 +457,8 @@ def main() -> None:
     ncu_text = read_ncu_details(ncu_details_path, status=args.status)
     ncu_us, ncu_kernel_count = ncu_duration_metrics(ncu_text, status=args.status)
     require_detailed_for_keep(args)
+    require_training_forward_interface(args)
+    require_training_quality_evidence(args, text)
 
     if args.status == "keep" and metrics["correctness"] != "PASS":
         raise RuntimeError("Refusing to record a non-PASS result with status=keep")

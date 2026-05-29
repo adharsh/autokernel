@@ -1,4 +1,4 @@
-"""Historical unit-scale FP8 dataflow example.
+"""Historical unit-scale FP8 dataflow reference, not an experiment.
 
 Do not run, submit, profile, or record this file as an experiment in this
 session. It uses unit FP8 scales and is not a valid scale-aware FP8 training
@@ -6,8 +6,11 @@ implementation. Use it only to understand the prior fast dataflow shape.
 
 Any real FP8 experiment must add an explicit scale policy before validation or
 NCU profiling. That policy must cover `x`, packed/up weights, down weights, and
-hidden activation quantization, and it must explain whether scales are computed
-inside the measured call or maintained/accounted as training state.
+hidden activation quantization. Under the current harness, official
+training-forward results must compute scales and FP8 weight state inside the
+measured forward. Prebuilt state is diagnostic-only under the current contract.
+It can become official only if the human explicitly changes the benchmark
+contract and a measured training-state update is added.
 
 Historical dataflow properties:
 - all FP8 conversions happen inside the measured invocation;
@@ -159,6 +162,9 @@ def kernel_fn(
     n_experts, inter_dim, _ = w1.shape
     tokens, model_dim = x.shape
 
+    # Unit scales are the reason this file is invalid for current experiments.
+    # Keep this code as a dataflow reference only; real candidates need a scale
+    # policy for x, weights, and hidden activation before validation/profiling.
     scale = torch.ones((), dtype=torch.float32, device=x.device)
     x_fp8 = _cast_fp8(x)
     w13_fp8 = _pack_w13_fp8(w1, w3)

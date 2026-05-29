@@ -465,6 +465,16 @@ or use reward hacking. Legitimate compiler, extension, or autotuning artifact
 caches are allowed only when they do not cache final answers or depend on
 recognizing the validation case.
 
+For FP8 Expert training-forward tasks, agents must not treat mutable training
+weights as immutable inference prepack. In the current harness, prebuilt FP8
+weights, expanded scale metadata, warmup-populated caches, and hardcoded
+activation scales are diagnostic-only. They can become official only if the
+human explicitly changes the benchmark contract and the refresh/update path is
+measured.
+The current harness has no separate refresh/update hook, so official keeps
+should compute FP8 weight/scale work inside the measured candidate call. The
+result recorder rejects obvious prebuilt-FP8-state interface variants by default.
+
 ### Optimization strategy
 Use the core backend stack according to the measured limiter and experiment
 hypothesis: PyTorch for reference/scaffolding, Triton, CUDA C++,
@@ -484,6 +494,7 @@ explicitly approved a scoped exception.
 - Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload
 - Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
 - Never add precomputed operator work to inputs
+- Under the current contract, never promote inference-prepack FP8 state as a training-forward result; it can become official only if the human explicitly changes the benchmark contract and refresh/update cost is measured
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment

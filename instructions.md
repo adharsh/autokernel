@@ -15,9 +15,21 @@ For deliberate input/interface reformulations, you may also update
 - For FP8 work, state the scale policy before coding. A missing scale policy or
   a repeat of a known simple static-scale baseline is scratch work, not a real
   experiment.
+- For this task, "forward" means training forward, not inference prepack
+  forward. In the current harness, prebuilt FP8 weights, pre-expanded scale
+  metadata, warmup-populated caches, and hardcoded activation scales are
+  diagnostic-only. They can become official only if the human explicitly changes
+  the benchmark contract and the refresh/update path is measured.
+- The current FP8 Expert harness has no separate refresh/update hook. Do not
+  modify `validate.py`/`reference.py` to pass FP8-packed weights, precomputed
+  scales, expanded scale metadata, or activation scale state as official inputs
+  unless the human explicitly changes the benchmark contract.
 - When `validate.py` prints `stress_quality`, `diagnostic_quality`, or
   `candidate_diagnostics`, use those rows in `keep`/`discard`, `current_base`,
   and next-experiment decisions.
+- Official `keep` rows must include `stress_quality` output and
+  `diagnostic_quality_status: PASS` in the validation log. Do not bypass quality
+  diagnostics for a `keep`.
 
 ## Setup
 
@@ -94,12 +106,24 @@ Legitimate compiler, extension, or autotuning artifact caches are allowed when
 they do not cache final answers or depend on recognizing the validation case.
 Runtime caches must also be fair for the task semantics: caching immutable model
 state, prepacked constants, or compiled kernels is legitimate only when the real
-workload would have that state available or when the cost is accounted for
-elsewhere. Cross-call caches of mutable inputs, weights, activations, or
+workload would have that state available and the setup/update cost is measured
+or explicitly part of the benchmark contract. Cross-call caches of mutable
+inputs, weights, activations, or
 input-derived work are not legitimate unless the task explicitly defines those
 values as stable/prepacked. If warmup populates a cache that the profiled
 invocation then reuses, explain why that is fair for the target workload before
 marking the result `keep`.
+For training-forward FP8 work, mutable weights are not inference constants.
+Supplying FP8 weight copies, packed weights, expanded scale metadata, or a fixed
+activation scale as if they were free inputs is not a valid official `keep`
+under the current contract. Such state can become official only if the human
+explicitly changes the benchmark contract and the measured profile includes the
+refresh/update path. Otherwise record the result only as a diagnostic or abandon
+it as scratch.
+Because this harness currently times only `candidate.kernel_fn(*bench_args)`,
+there is no official external refresh/update path to measure. Keep candidates
+must compute FP8 weight/scale work inside that measured invocation unless the
+human changes the contract first.
 Inputs must describe the problem, not solve it. Do not add precomputed operator
 windows, per-output validity matrices, partial reductions, partial outputs,
 transformed weights/activations, or other operator work as inputs.
@@ -352,6 +376,17 @@ instead of a dense layout plus conversion, or sequence/group metadata that a
 real caller would naturally have. Treat this kind of input change as a
 mathematical/data-model reformulation, not as evaluator manipulation.
 
+For this training-forward task, do not use interface reformulation to turn the
+benchmark into inference prepacking. Adding FP8-packed weights, precomputed
+weight scales, expanded scale tensors, or activation scale state is official
+only if the human explicitly changes the benchmark contract and the experiment
+also measures the training refresh/update work and records that cost. Without
+that, the row is diagnostic-only and must not become `current_base` or
+`best_speedup`.
+Under the current benchmark contract, agents may not add those FP8-state inputs
+at all for official results; use the original BF16 weights/input tensors and do
+the FP8 conversion/scale work inside the measured candidate call.
+
 Deliberate input/interface reformulations may update `validate.py` and
 `reference.py`. Keep those updates minimal: preserve the same stress shape,
 correctness cases, seeds, dtype, activation, outputs, and mathematical semantics
@@ -503,6 +538,9 @@ If the hints identify an already-covered scale family, such as a simple static
 FP8 scale baseline, state why the new hypothesis is materially different before
 coding. Repeating a known static-scale baseline is scratch work, not a valid
 experiment.
+Also state why the forward is training-realistic: whether weights are converted
+inside the measured forward, whether any FP8 weight state is refreshed inside
+the measured work, and how activation scales are updated rather than hardcoded.
 
 If the change deliberately changes the input/API representation, also set a
 short `INTERFACE_VARIANT` such as `seq_idx`, `cu_seqlens`, or `packed_layout`;
@@ -623,6 +661,8 @@ recording. `record_result.py` will reject a keep row without
 `$EXPERIMENT_DIR/ncu/detailed/details.txt`. Full profiles are not mandatory for
 every keep; run full only when the detailed profile leaves a scheduler,
 warp-state, instruction-mix, PM-sampling, or codegen question unresolved.
+`record_result.py` also rejects `keep` rows whose validation log is missing
+`stress_quality` or does not contain `diagnostic_quality_status: PASS`.
 
 ### 8. Compute Speedup And Status
 
@@ -653,6 +693,14 @@ should be recorded as `keep` after the required detailed profile unless it is
 genuinely disqualified by diagnostics, task hints, or fairness constraints.
 `record_result.py` enforces this and rejects faster-than-best `discard` rows by
 default.
+
+A faster row is still disqualified from `keep` when it wins by using inference
+prepack assumptions: prebuilt FP8 weights, unmeasured FP8 weight refresh,
+unmeasured scale metadata expansion, warmup-populated runtime caches, or fixed
+activation scales without a measured/update policy.
+`record_result.py` rejects obvious prebuilt-FP8-state `interface_variant` keep
+rows by default. Do not work around that guard unless the human explicitly
+changes the benchmark contract.
 
 ### 9. Log Result
 
@@ -714,6 +762,10 @@ What you expected to improve and why. Include the parent/current-best NCU
 limiter that motivated the experiment and the target-GPU-specific reasoning.
 For FP8 experiments, state the exact scale policy and why it is not merely the
 known simple static-scale baseline.
+For training-forward FP8, also state that FP8 weight/scale state is computed
+inside the measured forward. Mention a separate measured training-state update
+only if the human explicitly changed the benchmark contract to include one.
+If any state is prebuilt, say why the row is diagnostic-only.
 
 ## Architecture / Research Review
 State which target-GPU mechanism, mathematical reformulation, hint file, or
@@ -736,7 +788,7 @@ versus parent/current best. If `validate.py` printed `stress_quality`,
 `diagnostic_quality`, or `candidate_diagnostics`, summarize the important rows:
 aggregate quality, near-zero-aware relative error, norm drift, worst-expert
 quality, and any scale/saturation/zero-rate signals. Diagnostic quality rows are
-soft evidence unless they caused `correctness` to fail, but they must still
+part of the training-forward correctness signal; if they pass, they still must
 inform the design decision for scale-aware FP8 work.
 
 ## NCU Profile
