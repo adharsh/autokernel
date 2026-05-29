@@ -203,7 +203,10 @@ restarts only dead tracked agents. Pass agent IDs to limit resume to a known
 subset.
 `watch` runs in the foreground, clears the screen between refreshes, shows
 session age, experiment counts, per-agent experiment rate, each agent's last
-recorded experiment time, and exits on Ctrl+C without stopping agents.
+recorded experiment time, per-agent restart counts, and exits on Ctrl+C without
+stopping agents. When `watch` restarts a dead tracked agent, it appends an event
+to `results/agent_restarts.tsv` with the detection timestamp, agent id, old PID,
+new PID, and reason.
 `cleanup` is destructive and prompts before removing generated agent state. Use
 `./scripts/agents.sh cleanup --yes` for non-interactive cleanup. It preserves
 `.venv/`.

@@ -8,11 +8,13 @@ ROOT=$(pwd)
 RESULTS_DIR="$ROOT/results"
 LOGS_DIR="$RESULTS_DIR/logs"
 TSV="$RESULTS_DIR/experiments.tsv"
+RESTARTS_TSV="$RESULTS_DIR/agent_restarts.tsv"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 REFERENCE_TIMING_PATH="$RESULTS_DIR/reference_timing.json"
 SESSION_START_FILE="$RESULTS_DIR/session_started_at.txt"
 PID_FILE="$ROOT/.agent_pids"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s'
+RESTARTS_TSV_HEADER='timestamp	agent_id	old_pid	new_pid	reason'
 
 # Agent backend. AGENT_CLI accepts: claude, codex.
 # "code" is accepted as a codex alias to avoid accidentally invoking VS Code.
@@ -196,6 +198,67 @@ _init_results_tsv() {
       exit 1
     fi
   } 9<>"$TSV"
+}
+
+_init_restarts_tsv() {
+  local header
+
+  mkdir -p "$RESULTS_DIR"
+  touch "$RESTARTS_TSV"
+  {
+    flock -x 9
+    if [ ! -s "$RESTARTS_TSV" ]; then
+      printf "%s\n" "$RESTARTS_TSV_HEADER" > "$RESTARTS_TSV"
+      return
+    fi
+
+    header=$(head -n 1 "$RESTARTS_TSV")
+    if [ "$header" != "$RESTARTS_TSV_HEADER" ]; then
+      echo "restart TSV header does not match this run: $RESTARTS_TSV" >&2
+      exit 1
+    fi
+  } 9<>"$RESTARTS_TSV"
+}
+
+_append_restart_event() {
+  local agent_id="$1"
+  local old_pid="$2"
+  local new_pid="$3"
+  local reason="$4"
+  local timestamp
+
+  _init_restarts_tsv
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  {
+    flock -x 9
+    printf "%s\t%s\t%s\t%s\t%s\n" \
+      "$timestamp" "$agent_id" "$old_pid" "$new_pid" "$reason" >> "$RESTARTS_TSV"
+  } 9<>"$RESTARTS_TSV"
+}
+
+_restart_total_since() {
+  local start="$1"
+  if [ ! -f "$RESTARTS_TSV" ]; then
+    printf "0\n"
+    return
+  fi
+  awk -F'\t' -v start="$start" '
+    NR > 1 && (start == "" || $1 >= start) { count++ }
+    END { print count + 0 }
+  ' "$RESTARTS_TSV" 2>/dev/null
+}
+
+_restart_count_since() {
+  local agent_id="$1"
+  local start="$2"
+  if [ ! -f "$RESTARTS_TSV" ]; then
+    printf "0\n"
+    return
+  fi
+  awk -F'\t' -v a="$agent_id" -v start="$start" '
+    NR > 1 && $2 == a && (start == "" || $1 >= start) { count++ }
+    END { print count + 0 }
+  ' "$RESTARTS_TSV" 2>/dev/null
 }
 
 _format_duration() {
@@ -528,10 +591,12 @@ cmd_status() {
   local total_rows=0
   local session_rows=0
   local session_rate="n/a"
+  local session_restarts=0
   local line
   local state
   local count
   local best
+  local restart_count
   local last_id
   local last_elapsed
   local last_ts
@@ -560,14 +625,15 @@ cmd_status() {
       session_rate=$(awk -v count="$session_rows" -v seconds="$session_age_s" 'BEGIN { printf "%.2f", count * 3600.0 / seconds }')
     fi
   fi
+  session_restarts=$(_restart_total_since "$session_iso")
 
   echo ""
-  echo "Session started: $session_iso | age $session_age_text | experiments $session_rows since start ($total_rows total) | rate ${session_rate}/h"
+  echo "Session started: $session_iso | age $session_age_text | experiments $session_rows since start ($total_rows total) | rate ${session_rate}/h | restarts $session_restarts"
   echo ""
-  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
-    "agent" "pid" "state" "exp" "exp/h" "last" "last_dur" "last_seen" "best"
-  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
-    "-----" "---" "-----" "---" "-----" "----" "--------" "---------" "----"
+  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s %8s\n" \
+    "agent" "pid" "state" "exp" "exp/h" "last" "last_dur" "last_seen" "best" "restarts"
+  printf "  %-6s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s %8s\n" \
+    "-----" "---" "-----" "---" "-----" "----" "--------" "---------" "----" "--------"
   while read -r line; do
     [ -n "$line" ] || continue
     _parse_pid_line "$line"
@@ -581,6 +647,7 @@ cmd_status() {
     last_id="-"
     last_elapsed=""
     last_ts=""
+    restart_count=0
     if [ -f "$TSV" ]; then
       IFS=$'\t' read -r count best last_id last_elapsed last_ts < <(
         awk -F'\t' -v a="$_agent_id" -v start="$session_iso" '
@@ -615,6 +682,7 @@ cmd_status() {
         ' "$TSV" 2>/dev/null
       )
     fi
+    restart_count=$(_restart_count_since "$_agent_id" "$session_iso")
     agent_rate="n/a"
     if [ "$session_age_s" -gt 0 ]; then
       agent_rate=$(awk -v count="$count" -v seconds="$session_age_s" 'BEGIN { printf "%.2f", count * 3600.0 / seconds }')
@@ -630,9 +698,9 @@ cmd_status() {
         last_seen="$(_format_duration "$since_last") ago"
       fi
     fi
-    printf "  a%-5s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s\n" \
+    printf "  a%-5s %-10s %-8s %6s %8s %-12s %-12s %-12s %-8s %8s\n" \
       "$_agent_id" "$_pid" "$state" "$count" "$agent_rate" "$last_id" \
-      "$(_format_duration "$last_elapsed")" "$last_seen" "$best"
+      "$(_format_duration "$last_elapsed")" "$last_seen" "$best" "$restart_count"
   done < "$PID_FILE"
   echo ""
 }
@@ -830,6 +898,9 @@ cmd_resume() {
     _launch_agent "$GPU_ID" "$AGENT_ID" "$WORKTREE" "$LOG" \
       "$(_agent_resume_prompt "$AGENT_ID" "$WORKTREE" "$GPU_ID")"
 
+    if [ "${AUTOKERNEL_LOG_RESTARTS:-0}" = "1" ]; then
+      _append_restart_event "$AGENT_ID" "${pids[$idx]}" "$_agent_pid" "dead_pid"
+    fi
     pid_lines[$idx]="$AGENT_ID:$_agent_pid"
     _write_pid_file "${pid_lines[@]}"
     echo "  PID $_agent_pid"
@@ -851,6 +922,8 @@ cmd_watch() {
     exit 1
   fi
 
+  _init_restarts_tsv
+
   trap 'echo ""; echo "watch stopped; agents are still running"; echo "run ./scripts/agents.sh stop to kill agents"; exit 0' INT TERM
 
   local resume_output
@@ -862,7 +935,7 @@ cmd_watch() {
     echo "Ctrl+C stops the watcher only. Run ./scripts/agents.sh stop to kill agents."
     echo ""
 
-    resume_output=$(cmd_resume 2>&1)
+    resume_output=$(AUTOKERNEL_LOG_RESTARTS=1 cmd_resume 2>&1)
     if [[ "$resume_output" == *"Restarted "* || "$resume_output" == *"Starting fresh conversation"* ]]; then
       printf "%s\n\n" "$resume_output"
     fi
