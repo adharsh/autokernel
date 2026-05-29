@@ -131,11 +131,20 @@ def _safe_experiment_id(experiment_id) -> str:
     return str(experiment_id).replace("/", "_")
 
 
+def _is_baseline_experiment(experiment_id, parent_id) -> bool:
+    experiment_id = str(experiment_id)
+    parent_id = str(parent_id)
+    return parent_id == "-" and experiment_id.rsplit("/", 1)[-1] == "0"
+
+
 def profiling_coverage(df: pd.DataFrame) -> dict:
     """Check whether experiments have required NCU artifacts and note sections."""
     missing_ncu: list[str] = []
+    missing_detailed_keep: list[str] = []
     missing_note_sections: list[str] = []
     total = len(df)
+    ncu_required_total = 0
+    detailed_keep_total = 0
 
     for _, row in df.iterrows():
         eid = row.get("experiment_id", "")
@@ -146,8 +155,26 @@ def profiling_coverage(df: pd.DataFrame) -> dict:
         ncu_report = experiment_dir / "ncu" / "profile.ncu-rep"
         ncu_log = experiment_dir / "ncu" / "profile.log"
         ncu_details = experiment_dir / "ncu" / "details.txt"
-        if not ncu_report.exists() or not ncu_log.exists() or not ncu_details.exists():
+        status = classify_row(row)
+        if status != "crash":
+            ncu_required_total += 1
+        if (
+            status != "crash"
+            and (
+                not ncu_report.exists()
+                or not ncu_log.exists()
+                or not ncu_details.exists()
+            )
+        ):
             missing_ncu.append(str(eid))
+
+        is_baseline = _is_baseline_experiment(eid, row.get("parent_id", ""))
+        is_non_baseline_keep = status == "keep" and not is_baseline
+        if is_non_baseline_keep:
+            detailed_keep_total += 1
+            detailed_details = experiment_dir / "ncu" / "detailed" / "details.txt"
+            if not detailed_details.exists() or detailed_details.stat().st_size == 0:
+                missing_detailed_keep.append(str(eid))
 
         note_path = experiment_dir / "note.md"
         if not note_path.exists():
@@ -160,8 +187,12 @@ def profiling_coverage(df: pd.DataFrame) -> dict:
 
     return {
         "total": total,
-        "with_ncu": total - len(missing_ncu),
+        "ncu_required_total": ncu_required_total,
+        "with_ncu": ncu_required_total - len(missing_ncu),
         "missing_ncu": missing_ncu,
+        "detailed_keep_total": detailed_keep_total,
+        "with_detailed_keep": detailed_keep_total - len(missing_detailed_keep),
+        "missing_detailed_keep": missing_detailed_keep,
         "with_profile_notes": total - len(missing_note_sections),
         "missing_note_sections": missing_note_sections,
     }
@@ -404,7 +435,14 @@ def print_terminal_summary(df: pd.DataFrame) -> None:
     print(f"  Discarded:             {n_discard}")
     print(f"  Crashed:               {n_crash} ({cp:.0f}%)")
     coverage = profiling_coverage(df)
-    print(f"  NCU artifacts:         {coverage['with_ncu']}/{coverage['total']}")
+    print(
+        "  Basic NCU artifacts:   "
+        f"{coverage['with_ncu']}/{coverage['ncu_required_total']}"
+    )
+    print(
+        "  Detailed kept profiles:"
+        f" {coverage['with_detailed_keep']}/{coverage['detailed_keep_total']}"
+    )
     print(f"  Profile note sections: {coverage['with_profile_notes']}/{coverage['total']}")
 
     # Top 5
@@ -508,7 +546,8 @@ def generate_report(df: pd.DataFrame) -> None:
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| NCU artifacts present | {coverage['with_ncu']}/{coverage['total']} |",
+        f"| Basic NCU artifacts present | {coverage['with_ncu']}/{coverage['ncu_required_total']} |",
+        f"| Detailed profiles for non-baseline keeps | {coverage['with_detailed_keep']}/{coverage['detailed_keep_total']} |",
         f"| Notes with required profile sections | {coverage['with_profile_notes']}/{coverage['total']} |",
         "",
     ]
@@ -518,6 +557,13 @@ def generate_report(df: pd.DataFrame) -> None:
             L.append(f"- {eid}")
         if len(coverage["missing_ncu"]) > 20:
             L.append(f"- ... {len(coverage['missing_ncu']) - 20} more")
+        L.append("")
+    if coverage["missing_detailed_keep"]:
+        L.append("Missing detailed profiles for non-baseline keeps:")
+        for eid in coverage["missing_detailed_keep"][:20]:
+            L.append(f"- {eid}")
+        if len(coverage["missing_detailed_keep"]) > 20:
+            L.append(f"- ... {len(coverage['missing_detailed_keep']) - 20} more")
         L.append("")
     if coverage["missing_note_sections"]:
         L.append("Missing note profile sections:")

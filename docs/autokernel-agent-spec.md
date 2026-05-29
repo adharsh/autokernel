@@ -277,17 +277,18 @@ The launcher detects GPUs with `nvidia-smi`, initializes `results/experiments.ts
 ## 6.1 Profiling Ground Truth
 
 Profiling is the ground truth for optimization decisions. Every baseline and
-every experiment that launches GPU kernels must run an extensive Nsight Compute
-profile before its result is used to choose the next design:
+every recordable experiment that launches GPU kernels must run the official
+basic Nsight Compute timing profile before its result is used to choose the
+next design:
 
 ```bash
-scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" basic
 ```
 
 The helper runs:
 
 ```bash
-ncu --set full --target-processes all --kernel-name-base demangled --profile-from-start off ...
+ncu --set basic --target-processes all --kernel-name-base demangled --profile-from-start off ...
 ```
 
 and stores:
@@ -302,10 +303,17 @@ of `ncu_duration_us`. With
 the default command, `scripts/profile_ncu.sh` profiles
 `scripts/profile_candidate_once.py`, which calls `validate.make_stress_inputs()`,
 warms up the candidate, starts CUDA profiling, runs one candidate invocation,
-synchronizes, and stops profiling. Design decisions must cite the latest NCU
-evidence, especially speed-of-light metrics, SM and memory throughput,
-occupancy, memory traffic, instruction mix, dominant stall reasons, and
-launch/runtime behavior.
+synchronizes, and stops profiling.
+
+Use supplemental `detailed` profiles for every non-baseline `keep`, every new
+kernel family/backend/dataflow, and whenever `basic` does not explain the
+bottleneck. Use `full` only when scheduler, warp-state, instruction-mix,
+PM-sampling, or codegen evidence is needed. Supplemental profiles are written
+under `ncu/detailed/` or `ncu/full/`; they do not replace the official basic
+timing consumed by `results/experiments.tsv`. Design decisions must cite the
+latest relevant NCU evidence, especially speed-of-light metrics, SM and memory
+throughput, occupancy, memory traffic, instruction mix, dominant stall reasons,
+and launch/runtime behavior when those metrics are available.
 
 Before the first optimization pass for a task, agents should read NVIDIA's
 official Nsight Compute documentation and Kernel Profiling Guide and use them as
@@ -425,15 +433,13 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 4. Edit candidate/interface.py; for input/interface reformulations, also update validate.py and reference.py together
 5. git add candidate/ && git commit -m "a{id}/{n}: <description>" (also stage validate.py/reference.py for interface reformulations)
 6. Run: uv run python validate.py → write results/experiments/a{id}_{n}/run.log and extract calibrated reference_us, correctness, peak_vram_mb
-7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}"
-8. Compute speedup = reference_us / ncu_duration_us and decide status
-9. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base, interface_variant recorded)
-10. Write results/experiments/a{id}_{n}/note.md with interface_variant, NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
-11. If correctness == PASS and speedup > previous best:
-     status = "keep"
+7. Run required NCU profile: scripts/profile_ncu.sh "a{id}/{n}" basic, then create/update note.md from the profile evidence
+8. Compute speedup = reference_us / ncu_duration_us and decide status; if this is a non-baseline keep, run detailed and update the same note.md
+9. Finalize results/experiments/a{id}_{n}/note.md with interface_variant, NCU findings, speed-of-light gap, limiter, next design decision, and codegen inspected yes/no
+10. Append row to the shared root results/experiments.tsv through scripts/record_result.py (with file lock, parent_id = current_base, interface_variant recorded)
+11. If status == "keep":
      current_base = experiment_id           # advance base (stay on this branch)
-   Else (fail, crash, or correct but slower):
-     status = "discard" or "crash"
+   Else:
      git checkout {current_base}            # go back to last keep
 12. Repeat from step 1
 ```
@@ -441,7 +447,7 @@ Each agent follows the same playbook, running autonomously in its own worktree o
 Every experiment's branch is preserved regardless of outcome. To inspect any experiment later: `git checkout a{id}/{n}` or `git show a{id}/{n}:candidate/interface.py`.
 
 ### Tools available
-You have access to: `ncu`, `scripts/profile_ncu.sh`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. `scripts/profile_ncu.sh` is required for every baseline and experiment that launches kernels. Use `nsys` and microbench profiling for specific follow-up questions raised by NCU.
+You have access to: `ncu`, `scripts/profile_ncu.sh`, `nsys`, and a **microbench agent/skill** that writes xllm-style line-by-line microbenchmarks of your candidate code and returns a sub-op breakdown table. `scripts/profile_ncu.sh EXPERIMENT_ID basic` is required for every baseline and recordable experiment that launches kernels. Use `detailed`/`full`, `nsys`, and microbench profiling for specific follow-up questions raised by NCU.
 
 ### Submission integrity
 Agents optimize the implementation, not the evaluator. They must not memoize
@@ -653,7 +659,8 @@ cd $WORKTREE_PATH
 
 # Run baseline. reference_us is the calibrated constant for the stress case.
 uv run python validate.py → extract reference_us, correctness, peak_vram_mb
-scripts/profile_ncu.sh "a${AGENT_ID}/0" → write required baseline NCU report
+scripts/profile_ncu.sh "a${AGENT_ID}/0" basic → write required baseline NCU report
+write results/experiments/a${AGENT_ID}_0/note.md before recording
 
 # Record baseline
 append_result("a${AGENT_ID}/0", parent_id="-", status="keep", interface_variant="default", description="baseline")
@@ -689,7 +696,7 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", interface_variant=
 | 1 | `instructions.md` | `instructions.md` | Agent playbook — the "brain" of the system. Modeled after `autoresearch/program.md` |
 | 2 | `profile_utils.py` | `profile_utils.py` | NCU duration parsing, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
-| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Standard extensive Nsight Compute profile for every baseline and experiment, plus lightweight reference calibration |
+| 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Explicit `basic`/`detailed`/`full` Nsight Compute profiles for experiments, plus lightweight reference calibration |
 | 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
 | 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
 | 7 | Results TSV init | Part of setup | Header row creation + baseline recording |

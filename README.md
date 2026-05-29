@@ -133,7 +133,7 @@ only when you specifically need deeper reference profiling.
 Confirm Nsight Compute can run before launching agents:
 
 ```bash
-scripts/profile_ncu.sh smoke-test
+scripts/profile_ncu.sh smoke-test basic
 ```
 
 If this fails because hardware counters are restricted, see
@@ -213,10 +213,12 @@ written as `CRASH`.
 `results/experiments.tsv` is the compact machine-readable index. Detailed
 experiment memory lives under one folder per experiment, for example
 `results/experiments/a0_1/` for `a0/1`. The TSV row is the source of truth and
-should be written for every experiment; `note.md`, `run.log`, NCU reports, and
-optional artifacts live under the per-experiment folder. `analysis.py` audits
-this coverage and flags notes that are missing the required NCU, speed-of-light,
-design-decision, or codegen/PTX/SASS sections.
+should be written once for every experiment after `note.md` has been finalized;
+`note.md`, `run.log`, NCU reports, and optional artifacts live under the
+per-experiment folder. `analysis.py` audits this coverage and flags missing
+basic NCU artifacts, missing detailed profiles for non-baseline keeps, and
+notes that are missing the required NCU, speed-of-light, design-decision, or
+codegen/PTX/SASS sections.
 Rows include `interface_variant` so input/API reformulations stay visible in the
 shared table. Use `default` for the task's original interface and a short name
 such as `seq_idx` or `packed_layout` for deliberate variants.
@@ -230,11 +232,11 @@ manually edit the TSV.
 
 ## Profiling Policy
 
-Profiling is mandatory. Every baseline and every experiment that launches GPU
-kernels must run the standard extensive Nsight Compute pass:
+Profiling is mandatory. Every baseline and every recordable experiment that
+launches GPU kernels must run the official basic Nsight Compute timing pass:
 
 ```bash
-scripts/profile_ncu.sh "a${AGENT_ID}/${n}"
+scripts/profile_ncu.sh "a${AGENT_ID}/${n}" basic
 ```
 
 This stores `profile.ncu-rep`, `profile.log`, and `details.txt` under
@@ -242,6 +244,13 @@ This stores `profile.ncu-rep`, `profile.log`, and `details.txt` under
 `Duration us` rows are the source of `ncu_duration_us` in
 `results/experiments.tsv`, and their row count is stored as `ncu_kernel_count`;
 `validate.py` remains the source of correctness, `reference_us`, and VRAM.
+
+Use `scripts/profile_ncu.sh "a${AGENT_ID}/${n}" detailed` for every
+non-baseline `keep`, new kernel family/backend/dataflow, or unclear basic
+profile. Use `full` only when scheduler, warp-state, instruction-mix,
+PM-sampling, or codegen evidence is needed. Supplemental profiles live under
+`ncu/detailed/` or `ncu/full/` and do not replace the official basic timing in
+`experiments.tsv`.
 
 By default, `scripts/profile_ncu.sh` runs
 `uv run python scripts/profile_candidate_once.py` under Nsight Compute with
@@ -308,7 +317,7 @@ cat /proc/driver/nvidia/params | grep RmProfilingAdminOnly
 Then run a smoke profile from the repo root:
 
 ```bash
-scripts/profile_ncu.sh smoke-test
+scripts/profile_ncu.sh smoke-test basic
 ```
 
 ## Agent Playbook

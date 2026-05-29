@@ -1,8 +1,9 @@
 """Append one experiment result to the shared TSV with file locking.
 
 The official candidate timing is the sum of Nsight Compute kernel Duration rows
-from the experiment's ncu/details.txt. validate.py is still used for
-correctness, reference_us, and peak VRAM.
+from the experiment's basic profile at ncu/details.txt. validate.py is still
+used for correctness, reference_us, and peak VRAM. Every recorded experiment
+must already have note.md in its experiment artifact directory.
 """
 
 from __future__ import annotations
@@ -42,8 +43,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Path to Nsight Compute details.txt. Defaults to "
-            "$AUTOKERNEL_EXPERIMENTS_DIR/<experiment_id>/ncu/details.txt."
+            "Official basic Nsight Compute details.txt path. Defaults to "
+            "$AUTOKERNEL_EXPERIMENTS_DIR/<experiment_id>/ncu/details.txt; "
+            "custom paths are rejected unless AUTOKERNEL_ALLOW_CUSTOM_NCU_DETAILS=1."
         ),
     )
     parser.add_argument(
@@ -80,12 +82,24 @@ def read_run_log(path: Path, *, status: str) -> str:
         raise
 
 
-def default_ncu_details_path(experiment_id: str) -> Path:
+def experiment_artifact_dir(experiment_id: str) -> Path:
     experiments_dir = Path(
         os.environ.get("AUTOKERNEL_EXPERIMENTS_DIR", DEFAULT_EXPERIMENTS_DIR)
     )
     safe_id = experiment_id.replace("/", "_")
-    return experiments_dir / safe_id / "ncu" / "details.txt"
+    return experiments_dir / safe_id
+
+
+def default_ncu_details_path(experiment_id: str) -> Path:
+    return experiment_artifact_dir(experiment_id) / "ncu" / "details.txt"
+
+
+def default_supplemental_ncu_details_path(experiment_id: str, profile_set: str) -> Path:
+    return experiment_artifact_dir(experiment_id) / "ncu" / profile_set / "details.txt"
+
+
+def default_note_path(experiment_id: str) -> Path:
+    return experiment_artifact_dir(experiment_id) / "note.md"
 
 
 def read_ncu_details(path: Path, *, status: str) -> str:
@@ -95,8 +109,9 @@ def read_ncu_details(path: Path, *, status: str) -> str:
         if status == "crash":
             return ""
         raise RuntimeError(
-            f"Missing NCU details file: {path}. Run scripts/profile_ncu.sh for "
-            "this experiment before recording the result."
+            f"Missing NCU details file: {path}. Run "
+            "scripts/profile_ncu.sh <experiment_id> basic for this experiment "
+            "before recording the result."
         ) from None
 
 
@@ -120,6 +135,65 @@ def ncu_duration_metrics(text: str, *, status: str) -> tuple[str, str]:
         raise RuntimeError(f"Invalid total NCU duration: {total_us}")
 
     return f"{total_us:.3f}", str(len(durations))
+
+
+def is_baseline_experiment(experiment_id: str, parent_id: str) -> bool:
+    return parent_id == "-" and experiment_id.rsplit("/", 1)[-1] == "0"
+
+
+def require_detailed_for_keep(args: argparse.Namespace) -> None:
+    if args.status != "keep" or is_baseline_experiment(
+        args.experiment_id,
+        args.parent_id,
+    ):
+        return
+    if os.environ.get("AUTOKERNEL_REQUIRE_DETAILED_FOR_KEEP", "1") == "0":
+        return
+
+    detailed_path = default_supplemental_ncu_details_path(
+        args.experiment_id,
+        "detailed",
+    )
+    if not detailed_path.is_file() or detailed_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"Refusing to record status=keep without detailed NCU evidence: "
+            f"{detailed_path}. Run "
+            f"`scripts/profile_ncu.sh {args.experiment_id} detailed` before "
+            "recording a non-baseline keep result."
+        )
+
+
+def require_note(args: argparse.Namespace) -> None:
+    if os.environ.get("AUTOKERNEL_REQUIRE_NOTE", "1") == "0":
+        return
+
+    note_path = default_note_path(args.experiment_id)
+    if not note_path.is_file():
+        raise RuntimeError(
+            f"Refusing to record {args.experiment_id} without a note: "
+            f"{note_path}. Write note.md before recording the TSV row."
+        )
+    if not note_path.read_text(encoding="utf-8", errors="replace").strip():
+        raise RuntimeError(
+            f"Refusing to record {args.experiment_id} with an empty note: "
+            f"{note_path}. Fill in note.md before recording the TSV row."
+        )
+
+
+def require_official_basic_details(args: argparse.Namespace) -> None:
+    if args.ncu_details is None:
+        return
+    if os.environ.get("AUTOKERNEL_ALLOW_CUSTOM_NCU_DETAILS", "0") == "1":
+        return
+
+    expected = default_ncu_details_path(args.experiment_id).resolve()
+    actual = args.ncu_details.resolve()
+    if actual != expected:
+        raise RuntimeError(
+            f"Refusing custom NCU details path for official TSV timing: {actual}. "
+            f"Use the basic profile at {expected}. Supplemental detailed/full "
+            "profiles belong in note.md, not TSV timing fields."
+        )
 
 
 def git_output(*args: str) -> str:
@@ -201,9 +275,12 @@ def main() -> None:
 
     text = read_run_log(args.run_log, status=args.status)
     metrics = metrics_from_log(text, status=args.status)
+    require_note(args)
+    require_official_basic_details(args)
     ncu_details_path = args.ncu_details or default_ncu_details_path(args.experiment_id)
     ncu_text = read_ncu_details(ncu_details_path, status=args.status)
     ncu_us, ncu_kernel_count = ncu_duration_metrics(ncu_text, status=args.status)
+    require_detailed_for_keep(args)
 
     if args.status == "keep" and metrics["correctness"] != "PASS":
         raise RuntimeError("Refusing to record a non-PASS result with status=keep")

@@ -209,7 +209,7 @@ Next steps:
 4. Revert candidate/interface.py to the optimization entry point.
 5. Commit validate.py, reference.py, and any task setup so worktrees can see them.
 6. Confirm Nsight Compute profiling works:
-   scripts/profile_ncu.sh smoke-test
+   scripts/profile_ncu.sh smoke-test basic
 7. Restart Codex/Claude so microbench is discovered.
 8. Launch agents:
    ./scripts/agents.sh start
