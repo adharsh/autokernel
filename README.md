@@ -296,14 +296,12 @@ or use reward hacking. Legitimate compiler, extension, or autotuning artifact
 caches are fine only when they do not cache final answers or depend on
 recognizing the validation case.
 
-For FP8 Expert work, the benchmark is training forward, not inference prepack.
-In the current harness, prebuilt FP8 weights, expanded scale metadata,
-warmup-populated caches, and hardcoded activation scales are diagnostic-only.
-They can become official only if the human explicitly changes the benchmark
-contract and the refresh/update path is measured.
-The current harness has no separate refresh hook, so official keeps should
-compute FP8 weight/scale work inside the measured candidate call. The result
-recorder rejects obvious prebuilt-FP8-state interface variants by default.
+For convolution backward work, compact input-representation changes such as BOS
+offsets or sequence ids can be valid interface variants when they describe the
+same problem directly. Do not add precomputed forward outputs, activation
+derivatives, convolution windows, validity matrices, partial reductions, partial
+gradients, or transformed operator work as free inputs unless the human
+explicitly changes the benchmark contract.
 
 Backend choices are explicitly profile-driven. PyTorch, Triton, CUDA C++,
 CUDA C++ with inline PTX, CUTLASS, CUTE DSL, and PTX are all allowed, but moving

@@ -9,27 +9,18 @@ For deliberate input/interface reformulations, you may also update
 
 - Read `hints/README.md` first if present, then every file under `hints/`.
 - A passing speedup is not enough: task hints, fairness constraints, and
-  diagnostic quality decide whether a result is worth promoting.
+  profile evidence decide whether a result is worth promoting.
 - Do not run, profile, record, branch from, or set `best_speedup` from a
   hint-defined invalid, stale, already-covered, or diagnostic-only family.
-- For FP8 work, state the scale policy before coding. A missing scale policy or
-  a repeat of a known simple static-scale baseline is scratch work, not a real
-  experiment.
-- For this task, "forward" means training forward, not inference prepack
-  forward. In the current harness, prebuilt FP8 weights, pre-expanded scale
-  metadata, warmup-populated caches, and hardcoded activation scales are
-  diagnostic-only. They can become official only if the human explicitly changes
-  the benchmark contract and the refresh/update path is measured.
-- The current FP8 Expert harness has no separate refresh/update hook. Do not
-  modify `validate.py`/`reference.py` to pass FP8-packed weights, precomputed
-  scales, expanded scale metadata, or activation scale state as official inputs
-  unless the human explicitly changes the benchmark contract.
-- When `validate.py` prints `stress_quality`, `diagnostic_quality`, or
-  `candidate_diagnostics`, use those rows in `keep`/`discard`, `current_base`,
-  and next-experiment decisions.
-- Official `keep` rows must include `stress_quality` output and
-  `diagnostic_quality_status: PASS` in the validation log. Do not bypass quality
-  diagnostics for a `keep`.
+- This task is causal depthwise conv1d backward for the conv10 forward
+  semantics. Optimize gradients for `x`, `weight`, optional `bias`, and
+  optional `initial_states` from `dout` and optional `dfinal_states`.
+- Preserve BOS reset semantics, optional SiLU, dtype behavior, and the exact
+  returned-gradient contract from `reference.py` and `validate.py`.
+- Do not add precomputed convolution windows, valid-lag matrices, partial
+  reductions, partial gradients, transformed activations, or other operator
+  work as new inputs. Compact problem metadata such as sequence ids or offsets
+  may be proposed only as a deliberate input/interface reformulation.
 
 ## Setup
 
@@ -113,17 +104,6 @@ input-derived work are not legitimate unless the task explicitly defines those
 values as stable/prepacked. If warmup populates a cache that the profiled
 invocation then reuses, explain why that is fair for the target workload before
 marking the result `keep`.
-For training-forward FP8 work, mutable weights are not inference constants.
-Supplying FP8 weight copies, packed weights, expanded scale metadata, or a fixed
-activation scale as if they were free inputs is not a valid official `keep`
-under the current contract. Such state can become official only if the human
-explicitly changes the benchmark contract and the measured profile includes the
-refresh/update path. Otherwise record the result only as a diagnostic or abandon
-it as scratch.
-Because this harness currently times only `candidate.kernel_fn(*bench_args)`,
-there is no official external refresh/update path to measure. Keep candidates
-must compute FP8 weight/scale work inside that measured invocation unless the
-human changes the contract first.
 Inputs must describe the problem, not solve it. Do not add precomputed operator
 windows, per-output validity matrices, partial reductions, partial outputs,
 transformed weights/activations, or other operator work as inputs.
@@ -206,7 +186,7 @@ SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "reference_us\|correctness\|peak_vram_mb\|diagnostic_quality_status" "$EXPERIMENT_DIR/run.log"
+grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 scripts/profile_ncu.sh "a${AGENT_ID}/0" basic
 grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
 NOTE_PATH="$EXPERIMENT_DIR/note.md"
@@ -225,7 +205,7 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --run-log "$EXPERIMENT_DIR/run.log"
 ```
 
-The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before recording and before starting the next experiment; `record_result.py` rejects missing notes. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`. If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`, use it only for the baseline; do not record another reference wrapper as a non-baseline experiment. If task hints mark a result family as already-covered, diagnostic-only, stale, or not training credible under current diagnostics, exclude that family when setting `current_base` and `best_speedup`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before recording and before starting the next experiment; `record_result.py` rejects missing notes. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`. If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`, use it only for the baseline; do not record another reference wrapper as a non-baseline experiment. If task hints mark a result family as already-covered, diagnostic-only, or stale, exclude that family when setting `current_base` and `best_speedup`.
 
 ## Profiling Ground Truth
 
@@ -282,7 +262,7 @@ Profile set policy:
   other expensive sections are needed for the next hypothesis. Full is not the
   default for repeated variants of the same kernel family.
 
-If a hypothesis depends on Hopper FP8/WGMMA/TMA/CUTLASS/CuTe codegen, inspect
+If a hypothesis depends on Hopper WGMMA/TMA/CUTLASS/CuTe codegen, inspect
 PTX/SASS/cubin artifacts in addition to NCU. NCU `full` can show instruction
 statistics, but codegen claims need direct artifact evidence when possible.
 
@@ -348,8 +328,8 @@ PTX, and SASS-guided scheduling. Use one only when it is connected to the
 measured limiter or to a concrete external-source idea. Do not force an
 architecture feature just because it exists. Conversely, do not avoid
 Hopper-specific mechanisms for simplicity when the measured limiter requires
-native Hopper FP8, WGMMA, TMA, persistent/grouped scheduling, CUTLASS-3/CuTe,
-PTX, or SASS-guided work to move faster.
+WGMMA, TMA, persistent scheduling, CUTLASS-3/CuTe, PTX, or SASS-guided work to
+move faster.
 
 If you use hardware-specific CUDA/PTX, explain why it fits the profile, guard it
 by architecture when needed, and preserve a correct fallback.
@@ -376,16 +356,12 @@ instead of a dense layout plus conversion, or sequence/group metadata that a
 real caller would naturally have. Treat this kind of input change as a
 mathematical/data-model reformulation, not as evaluator manipulation.
 
-For this training-forward task, do not use interface reformulation to turn the
-benchmark into inference prepacking. Adding FP8-packed weights, precomputed
-weight scales, expanded scale tensors, or activation scale state is official
-only if the human explicitly changes the benchmark contract and the experiment
-also measures the training refresh/update work and records that cost. Without
-that, the row is diagnostic-only and must not become `current_base` or
-`best_speedup`.
-Under the current benchmark contract, agents may not add those FP8-state inputs
-at all for official results; use the original BF16 weights/input tensors and do
-the FP8 conversion/scale work inside the measured candidate call.
+For this backward task, do not use interface reformulation to hide convolution
+work outside the measured invocation. Adding precomputed forward activations,
+precomputed SiLU derivatives, validity matrices, partial reductions, partial
+gradients, transformed inputs/weights, or packed operator windows is official
+only if the human explicitly changes the benchmark contract. Without that, the
+row is diagnostic-only and must not become `current_base` or `best_speedup`.
 
 Deliberate input/interface reformulations may update `validate.py` and
 `reference.py`. Keep those updates minimal: preserve the same stress shape,
@@ -530,17 +506,10 @@ Then pick ONE focused change. Prefer target-GPU-specific, SASS/PTX-guided, or
 math/research-inspired changes over generic cleanup when the profile supports
 them. Write the change down as a short description (e.g., "force packed-math
 schedule", "try async staging for reused weights", "inline PTX cache hint for
-hot weights", "online state update to reduce stores", "reformulate activation
-sequence"). If the task hints require a numerical policy such as FP8 scaling,
-state that policy in the hypothesis before coding. A quantized/FP8 idea without
-the required scale policy is not a valid experiment hypothesis.
-If the hints identify an already-covered scale family, such as a simple static
-FP8 scale baseline, state why the new hypothesis is materially different before
-coding. Repeating a known static-scale baseline is scratch work, not a valid
-experiment.
-Also state why the forward is training-realistic: whether weights are converted
-inside the measured forward, whether any FP8 weight state is refreshed inside
-the measured work, and how activation scales are updated rather than hardcoded.
+hot weights", "fuse dx and dweight accumulation", "reformulate activation
+gradient sequence"). If the task hints identify an already-covered design
+family, state why the new hypothesis is materially different before coding.
+Repeating a known dead end is scratch work, not a valid experiment.
 
 If the change deliberately changes the input/API representation, also set a
 short `INTERFACE_VARIANT` such as `seq_idx`, `cu_seqlens`, or `packed_layout`;
@@ -581,10 +550,8 @@ Modify files inside `candidate/`. `interface.py` is the Python entry point that
 needed. One hypothesis per experiment.
 
 Before validation or profiling, compare the implementation against the task
-hints. If the hints require scale-aware FP8 or another numerical policy, the
-candidate must implement that policy before it is a real experiment. Do not run
-validation or NCU on a known-invalid scaffold just to get a fast number; revise
-it first or abandon the branch as scratch.
+hints. Do not run validation or NCU on a known-invalid scaffold just to get a
+fast number; revise it first or abandon the branch as scratch.
 
 If the hypothesis is a deliberate input/interface reformulation, update
 `validate.py` and `reference.py` together in the same branch. Keep the update
@@ -610,13 +577,12 @@ git add candidate/ validate.py reference.py && git commit -m "a{AGENT_ID}/{n}: {
 
 ```bash
 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
-grep "reference_us\|correctness\|peak_vram_mb\|diagnostic_quality_status" "$EXPERIMENT_DIR/run.log"
+grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 ```
 
-If the candidate is known to violate a task-hint validity requirement, such as a
-required scale-aware FP8 policy, do not treat a `PASS` as usable evidence and do
-not profile or record it. Return to the edit step and fix the validity issue
-first.
+If the candidate is known to violate a task-hint validity requirement, do not
+treat a `PASS` as usable evidence and do not profile or record it. Return to
+the edit step and fix the validity issue first.
 
 If `correctness` is not `PASS`, treat it as a blocking implementation bug first.
 Keep fixing the code and amending the experiment commit until correctness passes,
@@ -661,8 +627,6 @@ recording. `record_result.py` will reject a keep row without
 `$EXPERIMENT_DIR/ncu/detailed/details.txt`. Full profiles are not mandatory for
 every keep; run full only when the detailed profile leaves a scheduler,
 warp-state, instruction-mix, PM-sampling, or codegen question unresolved.
-`record_result.py` also rejects `keep` rows whose validation log is missing
-`stress_quality` or does not contain `diagnostic_quality_status: PASS`.
 
 ### 8. Compute Speedup And Status
 
@@ -673,16 +637,14 @@ speedup = reference_us / ncu_duration_us
 Decide `status` before recording the row:
 
 - `keep` if `correctness == PASS`, `speedup > best_speedup`, the detailed NCU
-  profile exists for this non-baseline keep, diagnostics are not materially
-  worse for the task, and the result is not disqualified by task hints or
-  fairness constraints. `best_speedup` means the best finalized compatible
-  `keep` row already present in the shared TSV, not a pending note or an
-  unrecorded result from another agent.
-- `discard` if correctness passed but comparable speedup did not improve, if
-  diagnostics make the result less training-credible, or if a valid experiment
-  failed to improve. Do not record hint-defined historical, stale,
-  already-covered, or diagnostic-only implementation families as experiment
-  rows.
+  profile exists for this non-baseline keep, and the result is not disqualified
+  by task hints or fairness constraints. `best_speedup` means the best
+  finalized compatible `keep` row already present in the shared TSV, not a
+  pending note or an unrecorded result from another agent.
+- `discard` if correctness passed but comparable speedup did not improve, if a
+  valid experiment failed to improve, or if the implementation is disqualified
+  by task hints. Do not record hint-defined historical, stale, already-covered,
+  or diagnostic-only implementation families as experiment rows.
 - `crash` if validation crashed or did not print usable metrics
 
 Do not prematurely discard a completed `PASS` experiment whose speedup beats the
@@ -690,17 +652,9 @@ best finalized compatible `keep` row in the TSV merely because another agent has
 a faster pending note. Pending notes are useful evidence for the next
 hypothesis, but they are not finalized results. A faster completed `PASS` row
 should be recorded as `keep` after the required detailed profile unless it is
-genuinely disqualified by diagnostics, task hints, or fairness constraints.
+genuinely disqualified by task hints or fairness constraints.
 `record_result.py` enforces this and rejects faster-than-best `discard` rows by
 default.
-
-A faster row is still disqualified from `keep` when it wins by using inference
-prepack assumptions: prebuilt FP8 weights, unmeasured FP8 weight refresh,
-unmeasured scale metadata expansion, warmup-populated runtime caches, or fixed
-activation scales without a measured/update policy.
-`record_result.py` rejects obvious prebuilt-FP8-state `interface_variant` keep
-rows by default. Do not work around that guard unless the human explicitly
-changes the benchmark contract.
 
 ### 9. Log Result
 
@@ -760,12 +714,9 @@ Interface Variant: {INTERFACE_VARIANT}
 ## Hypothesis
 What you expected to improve and why. Include the parent/current-best NCU
 limiter that motivated the experiment and the target-GPU-specific reasoning.
-For FP8 experiments, state the exact scale policy and why it is not merely the
-known simple static-scale baseline.
-For training-forward FP8, also state that FP8 weight/scale state is computed
-inside the measured forward. Mention a separate measured training-state update
-only if the human explicitly changed the benchmark contract to include one.
-If any state is prebuilt, say why the row is diagnostic-only.
+For backward-specific ideas, state which gradient path is targeted: `dx`,
+`dweight`, `dbias`, `dinitial_states`, SiLU derivative, BOS repair, or final
+state gradient.
 
 ## Architecture / Research Review
 State which target-GPU mechanism, mathematical reformulation, hint file, or
@@ -784,12 +735,8 @@ and why no operator work was precomputed into the inputs.
 
 ## Result
 Paste the stable validate.py metrics and summarize whether latency improved
-versus parent/current best. If `validate.py` printed `stress_quality`,
-`diagnostic_quality`, or `candidate_diagnostics`, summarize the important rows:
-aggregate quality, near-zero-aware relative error, norm drift, worst-expert
-quality, and any scale/saturation/zero-rate signals. Diagnostic quality rows are
-part of the training-forward correctness signal; if they pass, they still must
-inform the design decision for scale-aware FP8 work.
+versus parent/current best. If the run failed, include the first actionable
+traceback or mismatch summary.
 
 ## NCU Profile
 Full details read: yes. State which complete details files you read before
@@ -865,7 +812,7 @@ The reported `ncu_duration_us` corresponds to the profiled candidate invocation 
 ### 11. Keep or discard
 
 **If** `correctness == PASS`, `speedup > best_speedup`, and the result is worth
-promoting under the task hints and diagnostic-quality evidence:
+promoting under the task hints and profile evidence:
 - `status = "keep"`, `current_base = "a{AGENT_ID}/{n}"`, `best_speedup = speedup`
 
 Here `best_speedup` must come from finalized compatible `keep` rows in the
@@ -877,7 +824,7 @@ result as `keep` when it beats the finalized TSV best unless it is genuinely
 disqualified.
 
 **Else** (FAIL, CRASH, not faster than the finalized TSV best, or disqualified
-by hint-stated target, diagnostic-quality evidence, or fairness constraints):
+by hint-stated target, profile evidence, or fairness constraints):
 - `status = "discard"` (or `"crash"`)
 - `git checkout {current_base}`
 

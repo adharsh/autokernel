@@ -1,23 +1,34 @@
-"""Starting candidate implementation for the FP8 Expert forward task.
+"""Baseline candidate for causal depthwise conv1d backward.
 
-Agents should replace this BF16 baseline with an FP8 implementation that keeps
-the same public `kernel_fn` signature.
+Agents should replace this reference wrapper with an optimized implementation
+that keeps the same public ``kernel_fn`` signature and returns
+``(dx, dweight, dbias, dinitial_states)``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import torch
 
-from reference import kernel_fn as _bf16_reference_kernel
+from reference import kernel_fn as reference_kernel_fn
 
 
 def kernel_fn(
     x: torch.Tensor,
-    w1: torch.Tensor,
-    w2: torch.Tensor,
-    w3: torch.Tensor,
-    group_sizes: Sequence[int],
-) -> torch.Tensor:
-    return _bf16_reference_kernel(x, w1, w2, w3, group_sizes)
+    weight: torch.Tensor,
+    bias: torch.Tensor | None = None,
+    initial_states: torch.Tensor | None = None,
+    bos_mask: torch.Tensor | None = None,
+    activation: str | None = None,
+    dout: torch.Tensor | None = None,
+    dfinal_states: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    return reference_kernel_fn(
+        x,
+        weight,
+        bias,
+        initial_states,
+        bos_mask,
+        activation,
+        dout,
+        dfinal_states,
+    )

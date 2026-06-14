@@ -3,50 +3,59 @@
 Read this file first, then read every other file under `hints/`, including
 `hints/examples/`.
 
-Critical rules for this FP8 Expert training run:
+Critical rules for this causal conv1d backward run:
 
-- The goal is a fast, training-credible, scale-aware FP8 Expert forward path.
-  This is forward-only benchmarking for training, not inference prepacking.
-- Treat weights as mutable training weights. In the current harness, prebuilt
-  FP8 weight tensors, pre-expanded scale metadata, or warmup-populated weight
-  caches are diagnostic-only. They can become official only if the human
-  explicitly changes the benchmark contract and the refresh/update path is
-  measured.
-- The current harness has no separate training-state refresh hook. Do not add
-  FP8-packed weights, precomputed scales, expanded scale metadata, or activation
-  scale state as new inputs in `validate.py`/`reference.py` unless the human
-  explicitly changes the benchmark contract. For official `keep` rows, compute
-  that work inside the measured candidate invocation.
-- Do not promote a candidate that hardcodes an activation scale such as
-  `x_scale = 1/16`. Delayed/maintained activation scales need an explicit
-  training update policy and must pass the scale-shift diagnostic cases.
-- Unit-scale FP8 is historical context only. Do not run, profile, record, or
-  promote it.
-- Do not spend `a*/1` on a trivial static-scale port of the known FP8 dataflow.
-  Existing static-scale rows are comparison points, not strong bases to branch
-  from or speed thresholds that should block more credible experiments.
-- A real FP8 hypothesis must state scale granularity, how scales are computed
-  inside the measured forward, how scales enter GEMMs and hidden quantization,
-  and why the policy is credible for training. Mention a separate measured
-  training-state update only if the human has explicitly changed the benchmark
-  contract to include one.
-- `diagnostic_quality` rows are required evidence for ranking. They are not the
-  official speed benchmark, but they are hard validation evidence. Bad norm
-  drift, near-zero-relative behavior, outliers, scale-shift failures, or
-  worst-expert quality should prevent promotion.
-- Do not skip stress or diagnostic quality for official `keep` rows.
-- The simple example under `hints/examples/` is a dataflow reference only. Do
-  not submit it or lightly wrap it as a new experiment.
-- The historical maintained-state example is an upper-bound artifact, not a
-  production training-forward result: it uses maintained FP8 weight state and a
-  fixed activation scale without measuring the state refresh/update cost.
+- The task is the backward pass for the conv10 forward semantics, not another
+  forward-only pass. `kernel_fn` must return `(dx, dweight, dbias,
+  dinitial_states)` for the forward inputs plus `dout` and optional
+  `dfinal_states`.
+- Preserve the conv10 behavior exactly: causal depthwise width-2/3/4 conv,
+  optional bias, optional `initial_states`, optional `bos_mask` resets, optional
+  SiLU, fp32 forward accumulation, output cast behavior, and final-state
+  gradient contribution.
+- The stress case is the same shape family as conv10 forward:
+  `batch=8`, `seqlen=65536`, `dim=4096`, `width=4`, BF16, bias, initial
+  states, BOS mask, SiLU, `dout`, and `dfinal_states`. This intentionally
+  matches the primary `../conv10` forward stress case. The baseline backward
+  reference uses about 132 GB under NCU on H200, so keep extra workspaces and
+  temporary tensors tight.
+- Do not add precomputed forward outputs, preactivation tensors, SiLU
+  derivatives, convolution windows, valid-lag matrices, partial reductions,
+  partial gradients, transformed inputs/weights, or packed operator work as
+  inputs. Compact metadata such as BOS offsets or sequence ids is allowed only
+  as a deliberate interface reformulation.
+- Treat the copied conv10 forward implementation as strategy evidence, not as a
+  candidate. It optimized the forward main path to about `2013.55 us`, but
+  backward has different bottlenecks: `dx` needs a reversed causal stencil,
+  `dweight` reduces over batch/time, `dbias` reduces post-activation gradients,
+  and `dfinal_states` adds tail/prefix gradient paths.
+- If a forward trick is reused, explain the backward analog in the note. Good
+  candidates include width-specialized kernels, separating dense no-BOS regions
+  from BOS repair, packed BOS metadata, dirty row masks, vectorized contiguous-D
+  loads/stores, explicit SiLU derivative math, cache modifiers, and careful
+  tail/final-state handling.
+- Do not spend early experiments only on rewriting the baseline autograd call.
+  The first serious goal should be a direct fused backward implementation for
+  the width-4 BF16 stress path, with fallbacks for small width/no-bias/no-BOS
+  correctness cases.
 
-Most useful first directions:
+Useful first directions:
 
-- Maintain the known fast dataflow while adding a nontrivial scale policy:
-  dynamic per-tensor/per-expert scales first; delayed or maintained scales only
-  with a real measured refresh/update policy.
-- Preserve fast Hopper FP8 GEMM dispatch. If a scale policy changes dispatch and
-  slows hot GEMMs, document that tradeoff and pivot.
-- Look for ways to fuse or avoid global `h1/h3` traffic without losing native
-  Hopper FP8/WGMMA-class efficiency.
+- Start from the algebra. For preactivation `z[t,d]`, compute
+  `g[t,d] = dout[t,d] * silu'(z[t,d])` when activation is SiLU, otherwise
+  `g = dout`. Then `dbias[d] = sum_t g[t,d]`, `dweight[d,k]` is a masked
+  reduction of `g[t,d] * source_x[t,k,d]`, and `dx` is the reverse causal
+  convolution of `g` with the same BOS/reset rules plus `dfinal_states`.
+- Split the width-4 stress path from general fallbacks. A fast path can assume
+  BF16, contiguous `(batch, seqlen, dim)` inputs, width 4, bias present,
+  initial states present, BOS mask present, SiLU, and `dfinal_states` present;
+  keep the reference wrapper or a simple generic implementation for other
+  correctness cases until they are worth optimizing.
+- Profile whether the first fused candidate is dominated by recomputing
+  preactivation/SiLU derivative, by `dweight` reductions, by `dx` stores, or by
+  many tiny BOS repair/final-state kernels. Let that decide whether to fuse or
+  split kernels.
+- The conv10 forward frontier suggests dense no-BOS regions are worth treating
+  differently from BOS boundary rows. For backward, the same idea may apply to
+  `g`, `dx`, and `dweight`: do the dense body with simple vectorized kernels and
+  repair rows near BOS boundaries separately.

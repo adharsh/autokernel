@@ -465,15 +465,13 @@ or use reward hacking. Legitimate compiler, extension, or autotuning artifact
 caches are allowed only when they do not cache final answers or depend on
 recognizing the validation case.
 
-For FP8 Expert training-forward tasks, agents must not treat mutable training
-weights as immutable inference prepack. In the current harness, prebuilt FP8
-weights, expanded scale metadata, warmup-populated caches, and hardcoded
-activation scales are diagnostic-only. They can become official only if the
-human explicitly changes the benchmark contract and the refresh/update path is
-measured.
-The current harness has no separate refresh/update hook, so official keeps
-should compute FP8 weight/scale work inside the measured candidate call. The
-result recorder rejects obvious prebuilt-FP8-state interface variants by default.
+For convolution backward tasks, agents must not hide operator work in the input
+interface. Precomputed forward outputs, activation derivatives, convolution
+windows, validity matrices, partial reductions, partial gradients, transformed
+inputs/weights, or other operator work are diagnostic-only unless the human
+explicitly changes the benchmark contract. Compact problem metadata such as
+sequence ids, sequence lengths, offsets, or declared layouts can be valid
+interface variants when they preserve the same mathematical workload.
 
 ### Optimization strategy
 Use the core backend stack according to the measured limiter and experiment
@@ -494,7 +492,9 @@ explicitly approved a scoped exception.
 - Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload
 - Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
 - Never add precomputed operator work to inputs
-- Under the current contract, never promote inference-prepack FP8 state as a training-forward result; it can become official only if the human explicitly changes the benchmark contract and refresh/update cost is measured
+- Under the current contract, never promote precomputed convolution/backward
+  operator work as free input state; it can become official only if the human
+  explicitly changes the benchmark contract
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment

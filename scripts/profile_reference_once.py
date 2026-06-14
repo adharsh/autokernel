@@ -36,7 +36,7 @@ def main() -> None:
 
     bench_args = validate.make_stress_inputs()
 
-    with torch.no_grad():
+    with torch.enable_grad():
         for _ in range(args.warmup):
             reference_kernel_fn(*bench_args)
         torch.cuda.synchronize()
