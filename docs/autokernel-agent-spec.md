@@ -269,7 +269,7 @@ results/experiments.tsv        (shared, append-only, file-locked)
 ```
 
 ### Launch script (`scripts/agents.sh`)
-Each agent is a Codex or Claude process running with a pinned GPU:
+Each agent is a pi or Claude process running with a pinned GPU:
 ```bash
 ./scripts/setup.sh
 ./scripts/agents.sh start
@@ -384,7 +384,7 @@ for the current candidate code. It answers narrow follow-up questions such as
 "which kernel launch in this path is taking time?" or "what limiter changed
 after this implementation change?"
 
-This workflow is exposed as a Claude Code agent and as a Codex skill. It needs enough context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
+This workflow is exposed as a Claude Code agent and as a pi skill. It needs enough context to read code, write benchmarks, run them, and analyze results. The parent optimization agent only receives the summary table.
 
 Microbench profiling is a follow-up tool for attribution. It never replaces the
 required Nsight Compute profile for an experiment.
@@ -720,7 +720,7 @@ implementation change; do not record another reference wrapper as `a*/1+`.
 | 2 | `profile_utils.py` | `profile_utils.py` | NCU duration parsing, `append_result`, `read_results` utilities |
 | 3 | `analysis.py` | `analysis.py` | Plotting, terminal summary, report generation. Adapted from `autokernel/analysis.py` + `autoresearch/analysis.ipynb` |
 | 4 | Required NCU profile helper | `scripts/profile_ncu.sh`, `scripts/profile_candidate_once.py`, `scripts/profile_reference_once.py` | Explicit `basic`/`detailed`/`full` Nsight Compute profiles for experiments, plus lightweight reference calibration |
-| 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.codex/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
+| 5 | Kernel microbench workflow | `.claude/agents/microbench.md` and `~/.pi/agent/skills/microbench/SKILL.md` | Optional sub-op bottleneck analysis that complements NCU |
 | 6 | Launch script | `scripts/agents.sh` | Multi-GPU agent launcher with worktree setup |
 | 7 | Results TSV init | Part of setup | Header row creation + baseline recording |
 

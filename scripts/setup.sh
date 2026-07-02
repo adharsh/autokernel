@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Handles repeatable repo-local setup:
 # - optional uv sync
-# - Claude/Codex microbench discovery links
+# - Claude/pi microbench discovery links
 # - root validate.py/reference.py from templates when missing
 # - results/experiments.tsv and results/experiments/ initialization
 # - calibrated reference timing reminder
@@ -20,7 +20,7 @@ RESULTS_DIR="$ROOT/results"
 EXPERIMENTS_DIR="$RESULTS_DIR/experiments"
 TSV="$RESULTS_DIR/experiments.tsv"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s'
-CODEX_HOME=${CODEX_HOME:-"$HOME/.codex"}
+PI_AGENT_DIR=${PI_CODING_AGENT_DIR:-${PI_AGENT_DIR:-"$HOME/.pi/agent"}}
 
 DO_SYNC=0
 DO_VERIFY=0
@@ -124,7 +124,7 @@ copy_template() {
 
 setup_microbench_links() {
   ensure_symlink "$ROOT/.claude/agents/microbench.md" "../../agents/microbench.md"
-  ensure_symlink "$CODEX_HOME/skills/microbench/SKILL.md" "$ROOT/agents/microbench.md"
+  ensure_symlink "$PI_AGENT_DIR/skills/microbench/SKILL.md" "$ROOT/agents/microbench.md"
 }
 
 init_results_tsv() {
@@ -229,7 +229,7 @@ Next steps:
 5. Commit validate.py, reference.py, and any task setup so worktrees can see them.
 6. Confirm Nsight Compute profiling works:
    scripts/profile_ncu.sh smoke-test basic
-7. Restart Codex/Claude so microbench is discovered.
+7. Restart pi/Claude so microbench is discovered.
 8. Launch agents:
    ./scripts/agents.sh start
 EOF

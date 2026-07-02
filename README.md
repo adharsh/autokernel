@@ -52,7 +52,7 @@ editing task files:
 ```
 
 `setup.sh` installs/syncs the uv environment, links the microbench workflow for
-Claude Code and Codex, creates `reference.py` and `validate.py` from templates
+Claude Code and pi, creates `reference.py` and `validate.py` from templates
 when missing, and initializes `results/experiments.tsv`.
 
 Useful setup options:
@@ -154,7 +154,7 @@ git commit -m "task setup"
 Git worktrees only contain committed files, so uncommitted task setup changes
 will not be visible to agents.
 
-Restart Claude Code and/or Codex after setup so the microbench agent/skill is
+Restart Claude Code and/or pi after setup so the microbench agent/skill is
 discovered.
 
 ## 7. Launch Agents
@@ -162,10 +162,19 @@ discovered.
 Human-only step. Launch agents only after setup, validation, profiling smoke
 check, and commit are complete.
 
-Codex is the default backend. It launches with `gpt-5.5` at `xhigh` effort:
+pi is the default backend. It launches non-interactively with `pi --offline`
+from each agent worktree, using the default pifm model configured for bare
+`pi`:
 
 ```bash
 ./scripts/agents.sh start
+```
+
+Use an explicit pi model or thinking level:
+
+```bash
+PI_MODEL=pifm-vllm/checkpoint_XXXX ./scripts/agents.sh start
+PI_THINKING=high ./scripts/agents.sh start
 ```
 
 Use Claude instead:

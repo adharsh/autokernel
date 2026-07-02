@@ -16,9 +16,8 @@ PID_FILE="$ROOT/.agent_pids"
 TSV_HEADER='experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_count	reference_us	speedup	correctness	peak_vram_mb	status	interface_variant	description	experiment_elapsed_s'
 RESTARTS_TSV_HEADER='timestamp	agent_id	old_pid	new_pid	reason'
 
-# Agent backend. AGENT_CLI accepts: claude, codex.
-# "code" is accepted as a codex alias to avoid accidentally invoking VS Code.
-AGENT_CLI=${AGENT_CLI:-codex}
+# Agent backend. AGENT_CLI accepts: pi, claude.
+AGENT_CLI=${AGENT_CLI:-pi}
 
 # Claude settings
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
@@ -26,18 +25,23 @@ CLAUDE_MODEL=claude-opus-4-7
 CLAUDE_EFFORT=high
 CLAUDE_ALLOWED_TOOLS=(Edit Write Read Bash Glob Grep Agent)
 
-# Codex settings
-CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=gpt-5.5
-CODEX_EFFORT=xhigh
-CODEX_SERVICE_TIER=fast
-CODEX_COMMON_ARGS=(
-  --json
-  --dangerously-bypass-approvals-and-sandbox
-  -m "$CODEX_MODEL"
-  -c "reasoning.effort=\"$CODEX_EFFORT\""
-  -c "service_tier=\"$CODEX_SERVICE_TIER\""
+# pi settings. A bare pi should already be configured by pifm; PI_MODEL and
+# PI_THINKING are optional overrides for launches that need an explicit model.
+PI_BIN=${PI_BIN:-pi}
+PI_MODEL=${PI_MODEL:-}
+PI_THINKING=${PI_THINKING:-}
+PI_COMMON_ARGS=(
+  --offline
+  --no-session
+  --approve
+  -p
 )
+if [ -n "$PI_MODEL" ]; then
+  PI_COMMON_ARGS+=(--model "$PI_MODEL")
+fi
+if [ -n "$PI_THINKING" ]; then
+  PI_COMMON_ARGS+=(--thinking "$PI_THINKING")
+fi
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -58,6 +62,7 @@ Commands:
 Examples:
   ./scripts/agents.sh start
   AGENT_CLI=claude ./scripts/agents.sh start
+  PI_MODEL=pifm-vllm/checkpoint_XXXX ./scripts/agents.sh start
   ./scripts/agents.sh resume a3 a7
   ./scripts/agents.sh watch 5
 EOF
@@ -120,14 +125,14 @@ _agent_id_in_list() {
 
 _normalize_agent_cli() {
   case "${AGENT_CLI,,}" in
+    pi|pifm)
+      AGENT_CLI=pi
+      ;;
     claude)
       AGENT_CLI=claude
       ;;
-    codex|code)
-      AGENT_CLI=codex
-      ;;
     *)
-      echo "Unsupported AGENT_CLI=$AGENT_CLI. Expected 'claude' or 'codex'." >&2
+      echo "Unsupported AGENT_CLI=$AGENT_CLI. Expected 'pi' or 'claude'." >&2
       exit 1
       ;;
   esac
@@ -135,15 +140,21 @@ _normalize_agent_cli() {
 
 _agent_command() {
   case "$AGENT_CLI" in
+    pi)     printf "%s\n" "$PI_BIN" ;;
     claude) printf "%s\n" "$CLAUDE_BIN" ;;
-    codex)  printf "%s\n" "$CODEX_BIN" ;;
   esac
 }
 
 _agent_model_summary() {
   case "$AGENT_CLI" in
+    pi)
+      printf "offline=true model=%s" "${PI_MODEL:-default}"
+      if [ -n "$PI_THINKING" ]; then
+        printf " thinking=%s" "$PI_THINKING"
+      fi
+      printf "\n"
+      ;;
     claude) printf "model=%s effort=%s\n" "$CLAUDE_MODEL" "$CLAUDE_EFFORT" ;;
-    codex)  printf "model=%s effort=%s service_tier=%s\n" "$CODEX_MODEL" "$CODEX_EFFORT" "$CODEX_SERVICE_TIER" ;;
   esac
 }
 
@@ -428,7 +439,6 @@ _launch_agent() {
   local old_pwd="$PWD"
   # All launches start a fresh CLI conversation. Resume state is reconstructed
   # from the worktree, experiments TSV, logs, and notes via the prompt.
-  local codex_cmd=(exec)
 
   case "$AGENT_CLI" in
     claude)
@@ -451,7 +461,7 @@ _launch_agent() {
           >> "$log" 2>&1 &
       _agent_pid=$!
       ;;
-    codex)
+    pi)
       cd "$worktree"
       AGENT_ID=$agent_id \
         WORKTREE_PATH=$worktree \
@@ -460,11 +470,10 @@ _launch_agent() {
         AUTOKERNEL_EXPERIMENTS_TSV=$TSV \
         AUTOKERNEL_EXPERIMENTS_DIR=$EXPERIMENTS_DIR \
         AUTOKERNEL_REFERENCE_TIMING_PATH=$REFERENCE_TIMING_PATH \
+        PI_OFFLINE=1 \
         CUDA_VISIBLE_DEVICES=$gpu_id \
-        "$CODEX_BIN" "${codex_cmd[@]}" \
-          "${CODEX_COMMON_ARGS[@]}" \
-          - \
-          >> "$log" 2>&1 <<< "$prompt" &
+        "$PI_BIN" "${PI_COMMON_ARGS[@]}" "$prompt" \
+          < /dev/null >> "$log" 2>&1 &
       _agent_pid=$!
       cd "$old_pwd"
       ;;
