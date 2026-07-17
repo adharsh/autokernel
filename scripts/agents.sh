@@ -28,15 +28,17 @@ CLAUDE_ALLOWED_TOOLS=(Edit Write Read Bash Glob Grep Agent)
 
 # Codex settings
 CODEX_BIN=${CODEX_BIN:-codex}
-CODEX_MODEL=gpt-5.5
-CODEX_EFFORT=xhigh
+CODEX_MODEL=gpt-5.6-sol
+CODEX_EFFORT=max
 CODEX_SERVICE_TIER=fast
+CODEX_FAST_MODE=true
 CODEX_COMMON_ARGS=(
   --json
   --dangerously-bypass-approvals-and-sandbox
   -m "$CODEX_MODEL"
-  -c "reasoning.effort=\"$CODEX_EFFORT\""
+  -c "model_reasoning_effort=\"$CODEX_EFFORT\""
   -c "service_tier=\"$CODEX_SERVICE_TIER\""
+  -c "features.fast_mode=$CODEX_FAST_MODE"
 )
 
 # ---------------------------------------------------------------------------
@@ -143,7 +145,8 @@ _agent_command() {
 _agent_model_summary() {
   case "$AGENT_CLI" in
     claude) printf "model=%s effort=%s\n" "$CLAUDE_MODEL" "$CLAUDE_EFFORT" ;;
-    codex)  printf "model=%s effort=%s service_tier=%s\n" "$CODEX_MODEL" "$CODEX_EFFORT" "$CODEX_SERVICE_TIER" ;;
+    codex)  printf "model=%s effort=%s service_tier=%s fast_mode=%s\n" \
+      "$CODEX_MODEL" "$CODEX_EFFORT" "$CODEX_SERVICE_TIER" "$CODEX_FAST_MODE" ;;
   esac
 }
 
