@@ -1,4 +1,4 @@
-"""Calibrate and store the reference NCU duration used by validate.py."""
+"""Calibrate the aggregate reference NCU duration used by validate.py."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         default=int(
             os.environ.get("AUTOKERNEL_REFERENCE_NCU_WARMUP", DEFAULT_REFERENCE_WARMUP)
         ),
-        help="Reference warmup calls before the single NCU-profiled invocation.",
+        help="Reference warmup passes before the NCU-profiled benchmark suite.",
     )
     parser.add_argument(
         "--output",
@@ -137,7 +137,8 @@ def main() -> None:
             else "cpu"
         ),
         "dtype": str(validate.benchmark_dtype()).replace("torch.", ""),
-        "case": validate.STRESS_BENCHMARK_CASE.name,
+        "case": validate.BENCHMARK_SUITE_NAME,
+        "cases": [spec.name for spec in validate.BENCHMARK_CASES],
     }
     payload.update(
         {

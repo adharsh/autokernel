@@ -18,14 +18,15 @@ What carried the forward result:
 
 Backward implications:
 
-- Reuse the idea of a dense no-BOS fast path plus repair, but do not copy the
+- Reuse the idea of dense no-BOS paths plus targeted repair, but do not copy the
   forward dataflow blindly. Backward has three large jobs: recompute or recover
   `z` for SiLU derivative, accumulate `dweight/dbias`, and write `dx`.
 - `dweight` is a reduction over `(batch, time)` for each `(dim, width)`. It may
   need a different tiling and reduction strategy than the forward contiguous-D
-  map.
-- `dx` is a reversed masked width-4 stencil. Dense regions can use a simple
-  four-term reverse conv, while rows adjacent to BOS boundaries need repair.
+  map. Its partial/final reduction layout must cover widths 2, 3, and 4.
+- `dx` is a reversed masked width-2/3/4 stencil. Dense regions can use a simple
+  width-specialized reverse conv, while rows adjacent to BOS boundaries need
+  repair.
 - `dfinal_states` contributes directly to tail `dx` and, for short sequences,
   to `dinitial_states`. Do not optimize only the `dout` path.
 - Forward's final frontier was L2/DRAM heavy. If backward profiles similarly,
@@ -37,7 +38,12 @@ Known traps:
 
 - A forward-only candidate or a wrapper around the conv10 forward code is not a
   valid experiment for this repo.
+- The `bwd1` winner is not feature-complete. Reusing its fast path is encouraged,
+  but retaining its reference fallback for any report-matrix case is invalid.
 - Precomputing forward outputs, preactivations, SiLU derivatives, valid masks,
   or partial reductions as inputs changes the benchmark and is not allowed.
 - A fast `dx`-only path is incomplete. The task returns all four gradients and
   correctness compares all present tensors.
+- A single width-4 BOS+SiLU fast path is also incomplete. `validate.py`
+  exhaustively checks all 24 report feature combinations, and official timing
+  includes representative paths for every width and feature value.

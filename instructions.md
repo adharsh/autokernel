@@ -17,6 +17,20 @@ For deliberate input/interface reformulations, you may also update
   optional `initial_states` from `dout` and optional `dfinal_states`.
 - Preserve BOS reset semantics, optional SiLU, dtype behavior, and the exact
   returned-gradient contract from `reference.py` and `validate.py`.
+- The required optimized surface is the exact 10,080-row BF16 forward-report
+  matrix declared by `validate.REPORT_*`: widths 2/3/4, activation None/SiLU,
+  initial state absent/present, and BOS mask absent/present across every report
+  B/L/D value. Bias, `dout`, and `dfinal_states` are present in that matrix.
+- Every one of the 24 report feature combinations must execute candidate code.
+  Delegating a report case to `reference.kernel_fn`, FLA, or another framework
+  fallback is invalid even when its output is correct. `validate.py` actively
+  rejects direct reference delegation on those cases.
+- Optional bias, missing `dfinal_states`, and FP32 are auxiliary correctness
+  cases. A production fallback remains acceptable there because those options
+  are outside the current 10,080-row report.
+- Official performance is aggregate NCU duration for all six
+  `validate.BENCHMARK_CASES`, not the width-4 primary anchor alone. Improve the
+  suite without discarding the `bwd1` winning width-4 path.
 - Do not add precomputed convolution windows, valid-lag matrices, partial
   reductions, partial gradients, transformed activations, or other operator
   work as new inputs. Compact problem metadata such as sequence ids or offsets
@@ -40,7 +54,8 @@ Optional timing and metadata overrides:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AUTOKERNEL_REFERENCE_NCU_WARMUP` | `5` | Reference warmup calls before the NCU-profiled calibration invocation. |
-| `AUTOKERNEL_NCU_WARMUP` | `20` | Warmup calls before the single profiled candidate invocation. |
+| `AUTOKERNEL_NCU_WARMUP` | `20` | Warmup suite passes before the single profiled candidate-suite pass. |
+| `AUTOKERNEL_ALLOW_REFERENCE_BASELINE` | unset | Set to `1` only while validating the `a*/0` reference-wrapper baseline. Never use it for later experiments. |
 | `AUTOKERNEL_INTERFACE_VARIANT` | `default` | Input/API representation recorded in `results/experiments.tsv`. Change this when an experiment deliberately changes the input representation, e.g. `seq_idx`. |
 
 ### File rules
@@ -110,11 +125,13 @@ transformed weights/activations, or other operator work as inputs.
 
 ## Optimization Mission: Architecture-Specific Next Level
 
-The starting point is already a strong CUDA kernel. The goal for this run is not
-more small generic cleanup; it is to find a new level of performance through
-architecture-specific gains, mathematical reformulation, and research-driven
-ideas. Treat the actual profiled GPU as the target machine and be willing to
-rethink the algorithm, dataflow, and kernel mapping when profiling supports it.
+The `bwd1` hint is already a strong CUDA kernel for one width-4 configuration.
+The first goal in this run is to retain that path while building direct kernels
+for the other 23 report feature combinations. Then find a new aggregate level
+of performance through architecture-specific gains, mathematical reformulation,
+and research-driven ideas. Treat the actual profiled GPU as the target machine
+and be willing to rethink the algorithm, dataflow, and kernel mapping when
+profiling supports it.
 
 Prioritize experiments that are informed by the target architecture, SASS/PTX
 when needed, and current public optimization work. Depending on the hardware,
@@ -185,7 +202,7 @@ INTERFACE_VARIANT="${AUTOKERNEL_INTERFACE_VARIANT:-default}"
 SAFE_EXPERIMENT_ID="${EXPERIMENT_ID//\//_}"
 EXPERIMENT_DIR="$AUTOKERNEL_EXPERIMENTS_DIR/$SAFE_EXPERIMENT_ID"
 mkdir -p "$EXPERIMENT_DIR/ncu" "$EXPERIMENT_DIR/nsys" "$EXPERIMENT_DIR/microbench" "$EXPERIMENT_DIR/codegen"
-uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
+AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1 uv run python validate.py > "$EXPERIMENT_DIR/run.log" 2>&1
 grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 scripts/profile_ncu.sh "a${AGENT_ID}/0" basic
 grep "Duration[[:space:]]*us" "$EXPERIMENT_DIR/ncu/details.txt"
@@ -205,7 +222,7 @@ uv run python "$AUTOKERNEL_ROOT/scripts/record_result.py" \
   --run-log "$EXPERIMENT_DIR/run.log"
 ```
 
-The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before recording and before starting the next experiment; `record_result.py` rejects missing notes. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`. If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`, use it only for the baseline; do not record another reference wrapper as a non-baseline experiment. If task hints mark a result family as already-covered, diagnostic-only, or stale, exclude that family when setting `current_base` and `best_speedup`.
+The record script appends the baseline row to `$AUTOKERNEL_EXPERIMENTS_TSV` with file locking. The TSV row is mandatory. The note is mandatory shared learning context and must be written before recording and before starting the next experiment; `record_result.py` rejects missing notes. Set `current_base = "a{AGENT_ID}/0"`, `INTERFACE_VARIANT = "default"` unless the experiment deliberately changes it, `best_speedup = 1.0`, `n = 1`. The initial `candidate/interface.py` reference wrapper and `AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1` are allowed only for this baseline. Unset that variable after `a*/0`; every non-baseline validation must pass the reference-delegation guard. Do not record another reference wrapper as a non-baseline experiment. If task hints mark a result family as already-covered, diagnostic-only, or stale, exclude that family when setting `current_base` and `best_speedup`.
 
 ## Profiling Ground Truth
 
@@ -232,11 +249,12 @@ This runs `ncu --set basic --target-processes all` and writes:
 The normal `validate.py` pass is still the source of `reference_us`,
 correctness, and VRAM. The official candidate timing stored in
 `results/experiments.tsv` is `ncu_duration_us`: the sum of Nsight Compute
-kernel `Duration us` rows in `ncu/details.txt`. The number of summed rows is
+kernel `Duration us` rows for one complete six-case benchmark-suite pass in
+`ncu/details.txt`. The number of summed rows is
 stored as `ncu_kernel_count`. By default the NCU helper does not run the full
 validation timing loop; it runs
-`scripts/profile_candidate_once.py`, warms up the candidate, then profiles one
-candidate invocation using CUDA profiler start/stop markers.
+`scripts/profile_candidate_once.py`, warms up every benchmark case, then
+profiles one complete suite pass using CUDA profiler start/stop markers.
 
 Use supplemental deeper profiles only when they can change the next decision:
 
@@ -331,8 +349,9 @@ Hopper-specific mechanisms for simplicity when the measured limiter requires
 WGMMA, TMA, persistent scheduling, CUTLASS-3/CuTe, PTX, or SASS-guided work to
 move faster.
 
-If you use hardware-specific CUDA/PTX, explain why it fits the profile, guard it
-by architecture when needed, and preserve a correct fallback.
+If you use hardware-specific CUDA/PTX, explain why it fits the profile and guard
+it by architecture when needed. Any fallback must stay outside the required
+BF16 report matrix.
 
 ### Mathematical Reformulation
 
@@ -364,8 +383,8 @@ only if the human explicitly changes the benchmark contract. Without that, the
 row is diagnostic-only and must not become `current_base` or `best_speedup`.
 
 Deliberate input/interface reformulations may update `validate.py` and
-`reference.py`. Keep those updates minimal: preserve the same stress shape,
-correctness cases, seeds, dtype, activation, outputs, and mathematical semantics
+`reference.py`. Keep those updates minimal: preserve the same benchmark suite,
+report matrix, correctness cases, seeds, dtype, activation, outputs, and mathematical semantics
 unless the human explicitly creates a different benchmark. Commit the
 `validate.py` and `reference.py` changes with the experiment, record the
 `interface_variant` in the TSV row, and explain the reformulation in the note.
@@ -583,6 +602,10 @@ grep "reference_us\|correctness\|peak_vram_mb" "$EXPERIMENT_DIR/run.log"
 If the candidate is known to violate a task-hint validity requirement, do not
 treat a `PASS` as usable evidence and do not profile or record it. Return to
 the edit step and fix the validity issue first.
+
+Do not set `AUTOKERNEL_ALLOW_REFERENCE_BASELINE` here. It exists only for the
+`a*/0` command above. A non-baseline run performed with that override is invalid
+and must be rerun without it.
 
 If `correctness` is not `PASS`, treat it as a blocking implementation bug first.
 Keep fixing the code and amending the experiment commit until correctness passes,
@@ -806,7 +829,7 @@ experiment_id  parent_id  agent_id  commit  timestamp  ncu_duration_us  ncu_kern
 
 Set `parent_id = current_base`. Set `commit` = 7-char hash from `git rev-parse --short HEAD`.
 `reference_us` is a calibrated constant read by `validate.py`; do not re-time the reference implementation during experiments. Keep it stable for input-representation changes that preserve the same semantic workload.
-The reported `ncu_duration_us` corresponds to the profiled candidate invocation from `validate.make_stress_inputs()`. `ncu_kernel_count` is the number of NCU kernel Duration rows summed for that invocation. Correctness-only cases are broader coverage and do not affect the reported timing case.
+The reported `ncu_duration_us` is the sum of NCU kernel Duration rows for one pass over `validate.make_benchmark_inputs()`. `ncu_kernel_count` is the number of rows in that aggregate. `validate.make_stress_inputs()` exposes only the primary width-4 anchor for focused microbenchmarks; it is not the official experiment score. Correctness cases cover all 24 feature combinations and every report axis value but do not add work to the profiled suite.
 `experiment_elapsed_s` is wall-clock seconds since this agent's previous recorded row, or since the session start for the agent's first row. It is filled automatically by `record_result.py`.
 
 ### 11. Keep or discard
@@ -889,6 +912,8 @@ the cleanest honest test of the new idea.
 - Never modify `validate.py` or `reference.py` except for a deliberate, committed input/interface reformulation that preserves the same mathematical workload
 - Never memoize answers, hardcode outputs, special-case tests, detect evaluator behavior, or reward-hack
 - Never add precomputed operator work to the inputs
+- Never delegate a required BF16 report-matrix case to the reference, FLA, or a framework fallback
+- Never use `AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1` after the `a*/0` baseline
 - Never skip correctness checks
 - Never skip the required NCU profile for a baseline or experiment that launches kernels
 - One focused change per experiment

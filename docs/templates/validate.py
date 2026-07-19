@@ -8,9 +8,12 @@ correctness
 peak_vram_mb
 
 Design contract:
-- Define exactly one stress benchmark case. It is the only case used for
-  calibrated reference timing and NCU candidate profiling.
-- Expose that stress case through `make_stress_inputs()`.
+- Define one benchmark target as `BENCHMARK_CASES`. It may contain one case or
+  a small task-specific suite; calibration and candidate profiling use the same
+  complete target.
+- Expose the target through `make_benchmark_inputs()` and
+  `run_benchmark_suite()`. `make_stress_inputs()` may remain as a focused
+  compatibility helper for the primary case.
 - Define separate correctness-only cases for edge coverage. These cases compare
   candidate outputs to reference outputs but do not affect NCU profiling.
 - `reference_us` is loaded from `results/reference_timing.json`, produced by
@@ -57,6 +60,8 @@ STRESS_BENCHMARK_CASE = CaseSpec(
     name="stress_main",
     seed=1001,
 )
+BENCHMARK_SUITE_NAME = "stress_main_v1"
+BENCHMARK_CASES = (STRESS_BENCHMARK_CASE,)
 
 CORRECTNESS_CASES = (
     STRESS_BENCHMARK_CASE,
@@ -77,16 +82,27 @@ def device() -> torch.device:
 def make_case(spec: CaseSpec) -> tuple[Any, ...]:
     """Create positional args for one case.
 
-    The stress case and correctness-only cases should all be deterministic.
-    Place tensors directly on `device()` and use `benchmark_dtype()` for the
-    stress case unless the task requires a different dtype.
+    Benchmark and correctness-only cases should all be deterministic. Place
+    tensors directly on `device()` and use `benchmark_dtype()` for benchmark
+    cases unless the task requires a different dtype.
     """
     raise NotImplementedError("Fill in task-specific input construction")
 
 
 def make_stress_inputs() -> tuple[Any, ...]:
-    """Create the single stress case used for candidate and reference timing."""
+    """Create the primary benchmark case for focused profiling."""
     return make_case(STRESS_BENCHMARK_CASE)
+
+
+def make_benchmark_inputs() -> tuple[tuple[Any, ...], ...]:
+    """Create all inputs used for official calibration and profiling."""
+    return tuple(make_case(spec) for spec in BENCHMARK_CASES)
+
+
+def run_benchmark_suite(kernel_fn: Any, cases: tuple[tuple[Any, ...], ...]) -> None:
+    """Run one complete benchmark-suite pass without retaining outputs."""
+    for args in cases:
+        kernel_fn(*args)
 
 
 def clone_inputs(args: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -148,10 +164,16 @@ def calibrated_reference_us() -> float:
             "`uv run python scripts/calibrate_reference.py` in the target environment."
         )
 
-    if payload.get("case") != STRESS_BENCHMARK_CASE.name:
+    if payload.get("case") != BENCHMARK_SUITE_NAME:
         raise RuntimeError(
             f"Reference timing case {payload.get('case')!r} does not match "
-            f"stress case {STRESS_BENCHMARK_CASE.name!r}."
+            f"benchmark suite {BENCHMARK_SUITE_NAME!r}."
+        )
+
+    if payload.get("cases") != [spec.name for spec in BENCHMARK_CASES]:
+        raise RuntimeError(
+            "Reference timing cases do not match BENCHMARK_CASES. Re-run "
+            "`uv run python scripts/calibrate_reference.py`."
         )
 
     timing_source = payload.get("timing_source")

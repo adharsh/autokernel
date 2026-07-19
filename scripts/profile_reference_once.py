@@ -1,4 +1,4 @@
-"""Run one warmed-up reference invocation for Nsight Compute calibration."""
+"""Run one warmed-up reference benchmark suite for NCU calibration."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         "--warmup",
         type=int,
         default=DEFAULT_WARMUP,
-        help="Reference warmup calls before the single profiled invocation.",
+        help="Reference warmup passes before the profiled benchmark suite.",
     )
     return parser.parse_args()
 
@@ -34,22 +34,23 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for Nsight Compute profiling.")
 
-    bench_args = validate.make_stress_inputs()
+    benchmark_inputs = validate.make_benchmark_inputs()
 
     with torch.enable_grad():
         for _ in range(args.warmup):
-            reference_kernel_fn(*bench_args)
+            validate.run_benchmark_suite(reference_kernel_fn, benchmark_inputs)
         torch.cuda.synchronize()
 
         torch.cuda.profiler.start()
         try:
-            reference_kernel_fn(*bench_args)
+            validate.run_benchmark_suite(reference_kernel_fn, benchmark_inputs)
             torch.cuda.synchronize()
         finally:
             torch.cuda.profiler.stop()
 
     print(f"ncu_reference_warmup: {args.warmup}")
-    print("profiled_reference_invocations: 1")
+    print(f"profiled_reference_cases: {len(benchmark_inputs)}")
+    print("profiled_reference_suite_invocations: 1")
 
 
 if __name__ == "__main__":

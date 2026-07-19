@@ -13,8 +13,9 @@ per-experiment profile.
 ## Workflow
 
 1. Read `candidate/interface.py`, any candidate files it imports, and
-   `validate.py` for the stress input shape.
-2. Identify the specific candidate path or sub-operation to isolate.
+   `validate.py` for the six benchmark anchors and 24-feature parity contract.
+2. Identify the specific benchmark anchor, candidate path, or sub-operation to
+   isolate. State its width/activation/initial-state/BOS configuration.
 3. Write a temporary profiling target under `/tmp` or the experiment
    `microbench/` directory. Do not modify `candidate/`, `validate.py`, or
    `reference.py`.

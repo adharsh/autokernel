@@ -16,7 +16,7 @@ autokernel/
 ├── instructions.md          # Agent playbook (like autoresearch/program.md)
 ├── results/
 │   ├── experiments.tsv      # Shared, append-only experiment log (tab-separated)
-│   ├── reference_timing.json # Calibrated NCU reference timing for the stress case
+│   ├── reference_timing.json # Calibrated NCU timing for the benchmark target
 │   └── experiments/         # One artifact folder per experiment
 │       └── a0_1/
 │           ├── note.md
@@ -33,8 +33,8 @@ autokernel/
 └── scripts/
     ├── agents.sh            # Multi-agent launcher (one per GPU)
     ├── calibrate_reference.py # One-time reference timing calibration
-    ├── profile_candidate_once.py # Single warmed-up candidate profile target
-    ├── profile_reference_once.py # Single warmed-up reference profile target
+    ├── profile_candidate_once.py # One warmed-up candidate benchmark pass
+    ├── profile_reference_once.py # One warmed-up reference benchmark pass
     ├── profile_ncu.sh        # Required per-experiment Nsight Compute profiling
     ├── record_result.py      # File-locked experiment row appender
     └── setup.sh             # Local setup helper
@@ -57,9 +57,12 @@ autokernel/
 
 `validate.py` separates timing from correctness:
 
-- It defines exactly one stress benchmark case. This is the performance target.
-- `validate.make_stress_inputs()` exposes that exact timing case.
-- `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on that stress case once with a lightweight NCU pass and writes `results/reference_timing.json`.
+- It defines one official benchmark target in `BENCHMARK_CASES`. The target may
+  be a single case or a small task-specific suite.
+- `validate.make_benchmark_inputs()` and `run_benchmark_suite()` expose one
+  complete timing pass. `make_stress_inputs()` may expose the primary case for
+  focused microbenchmarks, but it is not the aggregate score when a suite is used.
+- `scripts/calibrate_reference.py` profiles `reference.kernel_fn` on the complete benchmark target once with a lightweight NCU pass and writes `results/reference_timing.json`.
 - Every `validate.py` run prints the calibrated NCU-based `reference_us`; candidate timing comes from `scripts/profile_ncu.sh`.
 - `validate.py` must not compute candidate duration with CUDA events, wall-clock timers, repeated medians, or other in-harness timing. The official candidate duration is the sum of NCU `Duration us` rows from `scripts/profile_ncu.sh`.
 - Correctness-only cases broaden behavioral coverage but do not change the profiled `ncu_duration_us` timing case.
@@ -90,7 +93,7 @@ experiment_id	parent_id	agent_id	commit	timestamp	ncu_duration_us	ncu_kernel_cou
 | `timestamp` | ISO8601 | `2026-03-20T14:32:00Z` | When the experiment completed |
 | `ncu_duration_us` | float | `42.3` | Sum of Nsight Compute kernel `Duration us` rows in microseconds |
 | `ncu_kernel_count` | int | `1` | Number of NCU kernel `Duration` rows summed for the profiled invocation |
-| `reference_us` | float | `85.1` | Calibrated reference latency in microseconds for the single stress benchmark case |
+| `reference_us` | float | `85.1` | Calibrated reference latency in microseconds for one complete benchmark-target pass |
 | `speedup` | float | `2.01` | `reference_us / ncu_duration_us` |
 | `correctness` | string | `PASS` | `PASS`, `FAIL`, or `CRASH` |
 | `peak_vram_mb` | float | `2048.5` | Peak GPU memory used during benchmark |
@@ -309,9 +312,9 @@ The raw `validate.py` pass remains the source of correctness, `reference_us`,
 and VRAM values for `results/experiments.tsv`; NCU `Duration us` is the source
 of `ncu_duration_us`. With
 the default command, `scripts/profile_ncu.sh` profiles
-`scripts/profile_candidate_once.py`, which calls `validate.make_stress_inputs()`,
-warms up the candidate, starts CUDA profiling, runs one candidate invocation,
-synchronizes, and stops profiling.
+`scripts/profile_candidate_once.py`, which calls `validate.make_benchmark_inputs()`,
+warms up every benchmark case, starts CUDA profiling, runs one complete target
+pass, synchronizes, and stops profiling.
 
 Use supplemental `detailed` profiles for every non-baseline `keep`, every new
 kernel family/backend/dataflow, and whenever `basic` does not explain the
@@ -527,7 +530,7 @@ explicitly approved a scoped exception.
   - Agent 3: diamonds
   - (etc.)
 - **Running minimum step line** (`#27ae60`): frontier of best latency achieved
-- **Reference baseline dashed line** (`#3498db`): calibrated reference latency for the stress benchmark case
+- **Reference baseline dashed line** (`#3498db`): calibrated reference latency for one complete benchmark-target pass
 - **Annotations**: Top-3 improvements labeled with descriptions
 - **Title**: includes total experiment count and number of kept improvements
 
@@ -659,7 +662,7 @@ printf 'experiment_id\tparent_id\tagent_id\tcommit\ttimestamp\tncu_duration_us\t
 # Verify reference and validation work. Calibration writes
 # results/reference_timing.json and is intentionally lightweight by default.
 uv run python scripts/calibrate_reference.py
-uv run python validate.py  # should PASS with reference implementation
+AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1 uv run python validate.py  # bwd2 baseline
 
 # Make task files available to all git worktrees
 git add validate.py reference.py candidate/
@@ -676,8 +679,8 @@ git commit -m "task setup"
 cd $WORKTREE_PATH
 # Baseline branch a{AGENT_ID}/0 was created by the launcher.
 
-# Run baseline. reference_us is the calibrated constant for the stress case.
-uv run python validate.py → extract reference_us, correctness, peak_vram_mb
+# Run baseline. reference_us is calibrated for the complete benchmark target.
+AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1 uv run python validate.py → extract reference_us, correctness, peak_vram_mb
 scripts/profile_ncu.sh "a${AGENT_ID}/0" basic → write required baseline NCU report
 write results/experiments/a${AGENT_ID}_0/note.md before recording
 
@@ -688,7 +691,8 @@ append_result("a${AGENT_ID}/0", parent_id="-", status="keep", interface_variant=
 
 If the initial `candidate/interface.py` is a wrapper around `reference.kernel_fn`,
 use that wrapper only for the baseline. Non-baseline experiments must make a real
-implementation change; do not record another reference wrapper as `a*/1+`.
+implementation change and must run without the baseline override; do not record
+another reference wrapper as `a*/1+`.
 
 ---
 

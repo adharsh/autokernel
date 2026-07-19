@@ -9,7 +9,9 @@ peak_vram_mb
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
+from itertools import product
 import json
 import math
 import os
@@ -20,7 +22,11 @@ from typing import Any
 import torch
 
 from candidate.interface import kernel_fn as candidate_kernel_fn
-from reference import kernel_fn as reference_kernel_fn
+from reference import (
+    CandidateReferenceDelegationError,
+    forbid_candidate_reference_delegation,
+    kernel_fn as reference_kernel_fn,
+)
 
 
 DEFAULT_GRAD_RTOL = 1e-3
@@ -31,6 +37,42 @@ FP32_GRAD_RTOL = 1e-4
 FP32_GRAD_ATOL = 1e-4
 ROOT = Path(__file__).resolve().parent
 DEFAULT_REFERENCE_TIMING_PATH = ROOT / "results" / "reference_timing.json"
+ALLOW_REFERENCE_BASELINE_ENV = "AUTOKERNEL_ALLOW_REFERENCE_BASELINE"
+
+# This is the exact BF16 matrix used by the xllm forward and backward reports.
+REPORT_BATCHES = (1, 2, 3, 4, 5, 8)
+REPORT_SEQLENS = (
+    3,
+    4,
+    11,
+    32,
+    128,
+    255,
+    512,
+    733,
+    1024,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+)
+REPORT_DIMS = (8, 64, 123, 256, 1024)
+REPORT_WIDTHS = (2, 3, 4)
+REPORT_ACTIVATIONS = (None, "silu")
+REPORT_INITIAL_STATE_OPTIONS = (False, True)
+REPORT_BOS_OPTIONS = (False, True)
+REPORT_CASE_COUNT = (
+    len(REPORT_BATCHES)
+    * len(REPORT_SEQLENS)
+    * len(REPORT_DIMS)
+    * len(REPORT_WIDTHS)
+    * len(REPORT_ACTIVATIONS)
+    * len(REPORT_INITIAL_STATE_OPTIONS)
+    * len(REPORT_BOS_OPTIONS)
+)
+
+BENCHMARK_SUITE_NAME = "backward_report_parity_v1"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -49,148 +91,223 @@ class CaseSpec:
     bos_prob: float = 0.05
     force_bos_first: bool = False
     dtype: torch.dtype | None = None
+    requires_optimized_path: bool = True
     grad_rtol: float
     grad_atol: float
 
 
-STRESS_BENCHMARK_CASE = CaseSpec(
-    name="backward_stress_b8_l65536_d4096_w4_bos_silu",
-    seed=1001,
-    batch=8,
-    seqlen=65536,
-    dim=4096,
-    width=4,
-    use_bias=True,
-    use_initial_states=True,
-    use_bos_mask=True,
-    use_dfinal_states=True,
-    activation="silu",
-    bos_prob=0.01,
-    grad_rtol=LARGE_BF16_GRAD_RTOL,
-    grad_atol=LARGE_BF16_GRAD_ATOL,
-)
-
-CORRECTNESS_CASES = (
-    # The full stress shape is intentionally reserved for reference calibration
-    # and NCU profiling through make_stress_inputs(). Running the analytical
-    # reference plus candidate on that shape for every validation pass makes the
-    # optimization loop impractical.
+BENCHMARK_CASES = (
+    # Preserve the bwd1 winning workload family, but use D=1024 so the primary
+    # anchor is also an exact member of the 10,080-case report matrix.
     CaseSpec(
-        name="primary_b8_l4096_d4096_w4_bos_silu",
-        seed=1234,
+        name="anchor_w4_stateful_bos_silu",
+        seed=1001,
         batch=8,
-        seqlen=4096,
-        dim=4096,
+        seqlen=65536,
+        dim=1024,
         width=4,
-        use_bias=True,
         use_initial_states=True,
         use_bos_mask=True,
-        use_dfinal_states=True,
         activation="silu",
+        bos_prob=0.01,
+        grad_rtol=LARGE_BF16_GRAD_RTOL,
+        grad_atol=LARGE_BF16_GRAD_ATOL,
+    ),
+    CaseSpec(
+        name="anchor_w4_stateless_dense_linear",
+        seed=1002,
+        batch=4,
+        seqlen=16384,
+        dim=1024,
+        width=4,
+        use_initial_states=False,
+        use_bos_mask=False,
+        activation=None,
+        grad_rtol=LARGE_BF16_GRAD_RTOL,
+        grad_atol=LARGE_BF16_GRAD_ATOL,
+    ),
+    CaseSpec(
+        name="anchor_w3_stateful_dense_silu",
+        seed=1003,
+        batch=4,
+        seqlen=16384,
+        dim=1024,
+        width=3,
+        use_initial_states=True,
+        use_bos_mask=False,
+        activation="silu",
+        grad_rtol=LARGE_BF16_GRAD_RTOL,
+        grad_atol=LARGE_BF16_GRAD_ATOL,
+    ),
+    CaseSpec(
+        name="anchor_w3_stateless_bos_linear",
+        seed=1004,
+        batch=4,
+        seqlen=16384,
+        dim=1024,
+        width=3,
+        use_initial_states=False,
+        use_bos_mask=True,
+        activation=None,
         bos_prob=0.01,
         force_bos_first=True,
         grad_rtol=LARGE_BF16_GRAD_RTOL,
         grad_atol=LARGE_BF16_GRAD_ATOL,
     ),
     CaseSpec(
-        name="latency_small_b2_l128_d256_w4_bos_silu",
-        seed=1235,
-        batch=2,
-        seqlen=128,
-        dim=256,
-        width=4,
-        use_bias=True,
+        name="anchor_w2_stateful_bos_linear",
+        seed=1005,
+        batch=4,
+        seqlen=16384,
+        dim=1024,
+        width=2,
         use_initial_states=True,
         use_bos_mask=True,
-        use_dfinal_states=True,
-        activation="silu",
+        activation=None,
         bos_prob=0.01,
         force_bos_first=True,
-        grad_rtol=DEFAULT_GRAD_RTOL,
-        grad_atol=DEFAULT_GRAD_ATOL,
+        grad_rtol=LARGE_BF16_GRAD_RTOL,
+        grad_atol=LARGE_BF16_GRAD_ATOL,
     ),
     CaseSpec(
-        name="small_with_initial_no_bos_no_activation",
-        seed=2001,
+        name="anchor_w2_stateless_dense_silu",
+        seed=1006,
+        batch=4,
+        seqlen=16384,
+        dim=1024,
+        width=2,
+        use_initial_states=False,
+        use_bos_mask=False,
+        activation="silu",
+        grad_rtol=LARGE_BF16_GRAD_RTOL,
+        grad_atol=LARGE_BF16_GRAD_ATOL,
+    ),
+)
+
+# Kept as a compatibility alias for focused microbench scripts. Official
+# calibration and experiment profiling use all of BENCHMARK_CASES.
+STRESS_BENCHMARK_CASE = BENCHMARK_CASES[0]
+
+
+def _make_report_feature_cases() -> tuple[CaseSpec, ...]:
+    cases = []
+    combinations = product(
+        REPORT_WIDTHS,
+        REPORT_ACTIVATIONS,
+        REPORT_INITIAL_STATE_OPTIONS,
+        REPORT_BOS_OPTIONS,
+    )
+    for index, (width, activation, use_initial_states, use_bos_mask) in enumerate(
+        combinations
+    ):
+        activation_name = activation or "linear"
+        state_name = "stateful" if use_initial_states else "stateless"
+        bos_name = "bos" if use_bos_mask else "dense"
+        cases.append(
+            CaseSpec(
+                name=f"report_w{width}_{state_name}_{bos_name}_{activation_name}",
+                seed=2000 + index,
+                batch=2,
+                seqlen=11,
+                dim=123,
+                width=width,
+                use_initial_states=use_initial_states,
+                use_bos_mask=use_bos_mask,
+                activation=activation,
+                bos_prob=0.2,
+                force_bos_first=use_bos_mask,
+                grad_rtol=LARGE_BF16_GRAD_RTOL,
+                grad_atol=LARGE_BF16_GRAD_ATOL,
+            )
+        )
+    return tuple(cases)
+
+
+def _make_report_shape_cases() -> tuple[CaseSpec, ...]:
+    """Exercise every B, L, and D value without materializing all 10,080 cases."""
+    cases = []
+    for index, seqlen in enumerate(REPORT_SEQLENS):
+        use_initial_states = bool(index & 1)
+        use_bos_mask = bool(index & 2)
+        activation = "silu" if index & 4 else None
+        cases.append(
+            CaseSpec(
+                name=f"report_shape_axis_{index:02d}",
+                seed=3000 + index,
+                batch=REPORT_BATCHES[index % len(REPORT_BATCHES)],
+                seqlen=seqlen,
+                dim=REPORT_DIMS[index % len(REPORT_DIMS)],
+                width=REPORT_WIDTHS[index % len(REPORT_WIDTHS)],
+                use_initial_states=use_initial_states,
+                use_bos_mask=use_bos_mask,
+                activation=activation,
+                bos_prob=0.1,
+                force_bos_first=use_bos_mask and index % 2 == 0,
+                grad_rtol=LARGE_BF16_GRAD_RTOL,
+                grad_atol=LARGE_BF16_GRAD_ATOL,
+            )
+        )
+    return tuple(cases)
+
+
+REPORT_FEATURE_CASES = _make_report_feature_cases()
+REPORT_SHAPE_CASES = _make_report_shape_cases()
+
+# These remain part of the public backward contract, but are not columns in the
+# current 10,080-row BF16 report. A production fallback is allowed for them.
+AUXILIARY_CORRECTNESS_CASES = (
+    CaseSpec(
+        name="auxiliary_no_bias",
+        seed=4001,
         batch=2,
         seqlen=17,
         dim=37,
         width=4,
-        use_bias=True,
-        use_initial_states=True,
-        use_bos_mask=False,
-        use_dfinal_states=True,
-        activation=None,
-        dtype=torch.float32,
-        grad_rtol=FP32_GRAD_RTOL,
-        grad_atol=FP32_GRAD_ATOL,
-    ),
-    CaseSpec(
-        name="bos_at_first_without_initial_or_bias",
-        seed=3001,
-        batch=3,
-        seqlen=23,
-        dim=64,
-        width=4,
         use_bias=False,
-        use_initial_states=False,
-        use_bos_mask=True,
-        use_dfinal_states=True,
-        force_bos_first=True,
-        grad_rtol=DEFAULT_GRAD_RTOL,
-        grad_atol=DEFAULT_GRAD_ATOL,
-    ),
-    CaseSpec(
-        name="short_sequence_dense_bos",
-        seed=4001,
-        batch=4,
-        seqlen=3,
-        dim=31,
-        width=4,
-        use_bias=True,
         use_initial_states=True,
         use_bos_mask=True,
-        use_dfinal_states=True,
-        bos_prob=0.45,
+        activation="silu",
+        bos_prob=0.2,
         force_bos_first=True,
         grad_rtol=DEFAULT_GRAD_RTOL,
         grad_atol=DEFAULT_GRAD_ATOL,
+        requires_optimized_path=False,
     ),
     CaseSpec(
-        name="width2_small_bos_silu_no_final_grad",
-        seed=5001,
+        name="auxiliary_no_final_state_grad",
+        seed=4002,
         batch=3,
         seqlen=29,
         dim=65,
         width=2,
-        use_bias=True,
-        use_initial_states=True,
-        use_bos_mask=True,
         use_dfinal_states=False,
         activation="silu",
-        bos_prob=0.17,
-        force_bos_first=True,
         grad_rtol=DEFAULT_GRAD_RTOL,
         grad_atol=DEFAULT_GRAD_ATOL,
+        requires_optimized_path=False,
     ),
     CaseSpec(
-        name="width3_small_bos_silu",
-        seed=5002,
-        batch=3,
-        seqlen=31,
-        dim=65,
+        name="auxiliary_fp32",
+        seed=4003,
+        batch=2,
+        seqlen=17,
+        dim=37,
         width=3,
-        use_bias=True,
-        use_initial_states=True,
-        use_bos_mask=True,
-        use_dfinal_states=True,
-        activation="silu",
-        bos_prob=0.17,
-        force_bos_first=True,
-        grad_rtol=DEFAULT_GRAD_RTOL,
-        grad_atol=DEFAULT_GRAD_ATOL,
+        use_bos_mask=False,
+        activation=None,
+        dtype=torch.float32,
+        grad_rtol=FP32_GRAD_RTOL,
+        grad_atol=FP32_GRAD_ATOL,
+        requires_optimized_path=False,
     ),
 )
+
+CORRECTNESS_CASES = (
+    REPORT_FEATURE_CASES + REPORT_SHAPE_CASES + AUXILIARY_CORRECTNESS_CASES
+)
+
+assert len(REPORT_FEATURE_CASES) == 24
+assert REPORT_CASE_COUNT == 10_080
 
 
 def benchmark_dtype() -> torch.dtype:
@@ -282,8 +399,19 @@ def make_case(spec: CaseSpec) -> tuple[Any, ...]:
 
 
 def make_stress_inputs() -> tuple[Any, ...]:
-    """Create the single stress case used for candidate and reference timing."""
+    """Create the primary width-4 anchor for focused debugging/microbenchmarks."""
     return make_case(STRESS_BENCHMARK_CASE)
+
+
+def make_benchmark_inputs() -> tuple[tuple[Any, ...], ...]:
+    """Create all cases in the official aggregate performance suite."""
+    return tuple(make_case(spec) for spec in BENCHMARK_CASES)
+
+
+def run_benchmark_suite(kernel_fn: Any, cases: tuple[tuple[Any, ...], ...]) -> None:
+    """Run every official performance case once without retaining outputs."""
+    for args in cases:
+        kernel_fn(*args)
 
 
 def clone_inputs(args: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -376,10 +504,17 @@ def calibrated_reference_us() -> float:
             "`uv run python scripts/calibrate_reference.py` in the target environment."
         )
 
-    if payload.get("case") != STRESS_BENCHMARK_CASE.name:
+    if payload.get("case") != BENCHMARK_SUITE_NAME:
         raise RuntimeError(
             f"Reference timing case {payload.get('case')!r} does not match "
-            f"stress case {STRESS_BENCHMARK_CASE.name!r}."
+            f"benchmark suite {BENCHMARK_SUITE_NAME!r}."
+        )
+
+    expected_cases = [spec.name for spec in BENCHMARK_CASES]
+    if payload.get("cases") != expected_cases:
+        raise RuntimeError(
+            "Reference timing cases do not match BENCHMARK_CASES. Re-run "
+            "`uv run python scripts/calibrate_reference.py`."
         )
 
     timing_source = payload.get("timing_source")
@@ -394,10 +529,23 @@ def calibrated_reference_us() -> float:
 
 def check_correctness() -> str:
     try:
+        allow_reference_baseline = os.environ.get(ALLOW_REFERENCE_BASELINE_ENV) == "1"
         for spec in CORRECTNESS_CASES:
             args = make_case(spec)
             reference = reference_kernel_fn(*clone_inputs(args))
-            candidate = candidate_kernel_fn(*clone_inputs(args))
+            reject_delegation = (
+                spec.requires_optimized_path and not allow_reference_baseline
+            )
+            guard = (
+                forbid_candidate_reference_delegation()
+                if reject_delegation
+                else nullcontext()
+            )
+            try:
+                with guard:
+                    candidate = candidate_kernel_fn(*clone_inputs(args))
+            except CandidateReferenceDelegationError as exc:
+                raise AssertionError(f"{spec.name}: {exc}") from exc
             try:
                 assert_close(candidate, reference, spec)
             except AssertionError as exc:

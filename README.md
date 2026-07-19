@@ -3,6 +3,15 @@
 AutoKernel is a scaffold for running autonomous GPU kernel optimization agents
 against a fixed validation harness.
 
+## bwd2 Task Contract
+
+This checkout targets optimized backward coverage for the same 10,080 BF16
+configurations as the xllm causal-convolution forward report. `validate.py`
+checks all 24 width/activation/initial-state/BOS combinations, rotates through
+every report B/L/D value, and rejects reference delegation for those cases.
+Official experiment timing is one pass over the six cases in
+`validate.BENCHMARK_CASES`; it is not timing of only the primary width-4 case.
+
 This README is ordered for setup. Follow it from top to bottom when creating a
 new task. Do not launch agents until the task files have been populated,
 validated, profiled with the smoke check, and committed.
@@ -82,9 +91,12 @@ belongs in `docs/templates/` so future tasks inherit it.
 Validation requirements:
 
 - Put the trusted implementation in `reference.kernel_fn`.
-- Define exactly one stress/benchmark case in `validate.py`; this same case is
-  used for calibrated reference timing and NCU candidate profiling.
-- Expose that timing case through `validate.make_stress_inputs()`.
+- Define one official benchmark target in `validate.py`. It may be a single
+  case or a task-specific suite; the same target must be used for calibrated
+  reference timing and NCU candidate profiling.
+- Expose the official target through `validate.make_benchmark_inputs()` and a
+  helper that runs one complete suite pass. This task keeps
+  `validate.make_stress_inputs()` only for focused work on its primary anchor.
 - Do not time candidate implementations inside `validate.py`. Candidate duration
   must come from the NCU `Duration us` rows produced by `scripts/profile_ncu.sh`.
 - Build separate correctness-only cases for representative shapes and edge
@@ -104,11 +116,11 @@ After task files are populated, run:
 
 ```bash
 uv run python scripts/calibrate_reference.py
-uv run python validate.py
+AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1 uv run python validate.py
 ```
 
 `scripts/calibrate_reference.py` profiles `reference.kernel_fn` once with
-Nsight Compute on the single stress benchmark case and stores
+Nsight Compute on the complete benchmark suite and stores
 `results/reference_timing.json`. Calibration is intentionally lightweight by
 default: it uses the `basic` NCU section set and only enough warmup to keep lazy
 initialization out of the profiled invocation. Its purpose is to produce the
@@ -120,12 +132,14 @@ the calibrated `results/reference_timing.json` value for the printed
 experiments.
 It is fine for the initial `candidate/interface.py` to call
 `reference.kernel_fn` for the baseline. After that baseline is recorded,
-non-baseline experiments should replace it with a real candidate implementation.
+non-baseline experiments must replace report-matrix delegation with real
+candidate implementations and run validation without
+`AUTOKERNEL_ALLOW_REFERENCE_BASELINE`.
 
 Candidate profiling uses `scripts/profile_ncu.sh`, not `validate.py` timing.
 Generated task harnesses must not add CUDA-event timers, wall-clock timers, or
 median timing tables for candidate speed inside `validate.py`.
-Reference calibration profiles one reference invocation after warmup; override
+Reference calibration profiles one reference suite pass after warmup; override
 its warmup with `AUTOKERNEL_REFERENCE_NCU_WARMUP` or
 `scripts/calibrate_reference.py --warmup`. Override the NCU section set with
 `AUTOKERNEL_REFERENCE_NCU_SET` or `scripts/calibrate_reference.py --ncu-set`
@@ -272,8 +286,8 @@ PM-sampling, or codegen evidence is needed. Supplemental profiles live under
 By default, `scripts/profile_ncu.sh` runs
 `uv run python scripts/profile_candidate_once.py` under Nsight Compute with
 profiling disabled at process start. That target calls
-`validate.make_stress_inputs()`, warms up the candidate, starts CUDA profiling,
-runs one candidate invocation, synchronizes, and stops profiling. Set
+`validate.make_benchmark_inputs()`, warms up the candidate on every case, starts
+CUDA profiling, runs one suite pass, synchronizes, and stops profiling. Set
 `AUTOKERNEL_NCU_WARMUP` to override the warmup count for this profile-only pass.
 
 Before the first optimization pass for a task, agents should read NVIDIA's

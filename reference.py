@@ -7,13 +7,34 @@ The backward contract is the gradient of the conv10 forward task:
 Given upstream gradients for ``out`` and optionally ``final_states``, return
 ``(dx, dweight, dbias, dinitial_states)``. The forward path accumulates in fp32
 and casts back to the input dtype; this file implements the corresponding
-backward equations directly so validation does not need to build a huge autograd
-graph for the stress case.
+backward equations directly so validation does not need to build huge autograd
+graphs for the benchmark suite.
 """
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import torch
+
+
+class CandidateReferenceDelegationError(RuntimeError):
+    """Raised when a report-parity candidate delegates to the reference."""
+
+
+_CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN = False
+
+
+@contextmanager
+def forbid_candidate_reference_delegation():
+    """Make reference delegation fail while validating an optimized path."""
+    global _CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN
+    previous = _CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN
+    _CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN = True
+    try:
+        yield
+    finally:
+        _CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN = previous
 
 
 def _bos_prefix(bos_mask: torch.Tensor | None) -> torch.Tensor | None:
@@ -235,6 +256,12 @@ def kernel_fn(
     ``dfinal_states`` may be ``None`` to indicate that the final-state output is
     not used by the loss.
     """
+    if _CANDIDATE_REFERENCE_DELEGATION_FORBIDDEN:
+        raise CandidateReferenceDelegationError(
+            "report-matrix cases must execute candidate kernels, not "
+            "reference.kernel_fn"
+        )
+
     if dout is None:
         raise TypeError("dout is required for the backward benchmark")
 

@@ -1,61 +1,107 @@
 # Hints Start Here
 
-Read this file first, then read every other file under `hints/`, including
-`hints/examples/`.
+Read this file first, then every other file under `hints/`, including all files
+under `hints/examples/`.
 
-Critical rules for this causal conv1d backward run:
+## Required Outcome
 
-- The task is the backward pass for the conv10 forward semantics, not another
-  forward-only pass. `kernel_fn` must return `(dx, dweight, dbias,
-  dinitial_states)` for the forward inputs plus `dout` and optional
-  `dfinal_states`.
-- Preserve the conv10 behavior exactly: causal depthwise width-2/3/4 conv,
-  optional bias, optional `initial_states`, optional `bos_mask` resets, optional
-  SiLU, fp32 forward accumulation, output cast behavior, and final-state
-  gradient contribution.
-- The stress case is the same shape family as conv10 forward:
-  `batch=8`, `seqlen=65536`, `dim=4096`, `width=4`, BF16, bias, initial
-  states, BOS mask, SiLU, `dout`, and `dfinal_states`. This intentionally
-  matches the primary `../conv10` forward stress case. The baseline backward
-  reference uses about 132 GB under NCU on H200, so keep extra workspaces and
-  temporary tensors tight.
-- Do not add precomputed forward outputs, preactivation tensors, SiLU
-  derivatives, convolution windows, valid-lag matrices, partial reductions,
-  partial gradients, transformed inputs/weights, or packed operator work as
-  inputs. Compact metadata such as BOS offsets or sequence ids is allowed only
-  as a deliberate interface reformulation.
-- Treat the copied conv10 forward implementation as strategy evidence, not as a
-  candidate. It optimized the forward main path to about `2013.55 us`, but
-  backward has different bottlenecks: `dx` needs a reversed causal stencil,
-  `dweight` reduces over batch/time, `dbias` reduces post-activation gradients,
-  and `dfinal_states` adds tail/prefix gradient paths.
-- If a forward trick is reused, explain the backward analog in the note. Good
-  candidates include width-specialized kernels, separating dense no-BOS regions
-  from BOS repair, packed BOS metadata, dirty row masks, vectorized contiguous-D
-  loads/stores, explicit SiLU derivative math, cache modifiers, and careful
-  tail/final-state handling.
-- Do not spend early experiments only on rewriting the baseline autograd call.
-  The first serious goal should be a direct fused backward implementation for
-  the width-4 BF16 stress path, with fallbacks for small width/no-bias/no-BOS
-  correctness cases.
+This run must produce an optimized backward implementation for every row in the
+same BF16 feature matrix used by the xllm forward report:
 
-Useful first directions:
+- `B`: `1, 2, 3, 4, 5, 8`
+- `L`: `3, 4, 11, 32, 128, 255, 512, 733, 1024, 4096, 8192, 16384, 32768, 65536`
+- `D`: `8, 64, 123, 256, 1024`
+- width: `2, 3, 4`
+- activation: `None`, `silu`
+- initial state: absent, present
+- BOS mask: absent, present
+- bias: present
+- `dout`: present
+- final-state gradient: present
+- dtype: BF16
 
-- Start from the algebra. For preactivation `z[t,d]`, compute
-  `g[t,d] = dout[t,d] * silu'(z[t,d])` when activation is SiLU, otherwise
-  `g = dout`. Then `dbias[d] = sum_t g[t,d]`, `dweight[d,k]` is a masked
-  reduction of `g[t,d] * source_x[t,k,d]`, and `dx` is the reverse causal
-  convolution of `g` with the same BOS/reset rules plus `dfinal_states`.
-- Split the width-4 stress path from general fallbacks. A fast path can assume
-  BF16, contiguous `(batch, seqlen, dim)` inputs, width 4, bias present,
-  initial states present, BOS mask present, SiLU, and `dfinal_states` present;
-  keep the reference wrapper or a simple generic implementation for other
-  correctness cases until they are worth optimizing.
-- Profile whether the first fused candidate is dominated by recomputing
-  preactivation/SiLU derivative, by `dweight` reductions, by `dx` stores, or by
-  many tiny BOS repair/final-state kernels. Let that decide whether to fuse or
-  split kernels.
-- The conv10 forward frontier suggests dense no-BOS regions are worth treating
-  differently from BOS boundary rows. For backward, the same idea may apply to
-  `g`, `dx`, and `dweight`: do the dense body with simple vectorized kernels and
-  repair rows near BOS boundaries separately.
+That is `6 * 14 * 5 * 3 * 2 * 2 * 2 = 10,080` cases. The 24 combinations
+of width, activation, initial-state presence, and BOS presence are the feature
+parity contract. A report-matrix case may not delegate to `reference.kernel_fn`,
+FLA, or another framework fallback. `validate.py` rejects direct delegation to
+`reference.kernel_fn` for these cases.
+
+Optional bias, a missing final-state gradient, and FP32 remain valid auxiliary
+API cases. They are correctness-tested, but this run does not require an
+optimized path for them because they are not rows in the current report.
+
+## Performance Target
+
+Official NCU timing is the total duration of one pass over six benchmark
+anchors. For each width, the suite includes two opposing feature configurations
+so that both values of activation, initial-state presence, and BOS presence
+affect the score. The primary anchor is the largest report shape,
+`B=8, L=65536, D=1024, W=4`, with initial state, BOS, and SiLU.
+
+`validate.make_stress_inputs()` remains available for focused work on that
+primary anchor. Official calibration and experiment profiles use
+`validate.make_benchmark_inputs()` and all six cases.
+
+## Previous Winner
+
+The best `bwd1` result was `a0/469` (`f301731`) at `3267.36 us` on the old
+`B=8, L=65536, D=4096, W=4` stateful BOS+SiLU stress case, a `90.82x`
+speedup over its calibrated reference. Its exact two-file candidate snapshot is
+under `hints/examples/bwd1_a0_469/`.
+
+Treat that snapshot as the performance seed for the width-4 stateful BOS+SiLU
+path, not as a complete solution. Its dispatcher falls back to
+`reference.kernel_fn` outside a narrow width-4 contract, and much of its final
+speed comes from SM90 cubin peepholes tied to exact generated code. Preserve or
+adapt the useful fast path, then add honest candidate kernels for the other 23
+feature combinations. Do not claim parity by weakening the support check.
+
+The copied forward winner in `hints/examples/conv10_best_forward_interface.py`
+is additional design evidence. It is not a backward candidate.
+
+## Mathematical Contract
+
+For preactivation `z[t,d]`, compute
+`g[t,d] = dout[t,d] * silu'(z[t,d])` for SiLU and `g = dout` otherwise. Then:
+
+- `dbias[d]` reduces `g` over batch and time.
+- `dweight[d,k]` reduces `g[t,d] * source_x[t,k,d]` with the same causal and
+  BOS-reset validity as forward.
+- `dx` is the reverse causal stencil with the same reset boundaries.
+- `dinitial_states` collects valid prefix contributions.
+- `dfinal_states` contributes to tail `dx` and, for short sequences, possibly
+  `dinitial_states`.
+
+The forward path accumulates in FP32 and casts outputs back to input dtype.
+Preserve that behavior and the exact return tuple
+`(dx, dweight, dbias, dinitial_states)`.
+
+## Fairness
+
+- Do not add precomputed forward outputs, preactivations, SiLU derivatives,
+  convolution windows, validity matrices, partial reductions, partial
+  gradients, or transformed inputs/weights as inputs.
+- Compact sequence metadata such as BOS offsets may be proposed only as a
+  deliberate interface reformulation.
+- Do not special-case the known validation inputs or benchmark shapes. Kernels
+  must be shape-generic across the declared report axes.
+- The baseline reference wrapper is allowed only for `a*/0`, using
+  `AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1`. Every later experiment must validate
+  without that override.
+
+## Suggested Decomposition
+
+- Keep width-specialized kernels where that produces better code, but share
+  dispatch and common algebra when it stays readable.
+- Separate dense and BOS-aware paths when reset repair would otherwise burden
+  every row.
+- Specialize activation at compile time so the linear path does not recompute
+  preactivation or SiLU derivatives.
+- Treat absent initial state as a real fast path, not a synthetic zero tensor
+  that adds avoidable traffic.
+- Make width-dependent reduction layouts explicit: the old winner's five-plane
+  layout is `dbias + 4 * dweight` and cannot simply be relabeled for widths 2/3.
+- Retain a production fallback only outside the report-parity contract.
+
+Use the aggregate profile and focused per-anchor microbenchmarks to prevent a
+large gain in one path from hiding a severe regression in another.

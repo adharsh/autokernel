@@ -220,11 +220,12 @@ print_next_steps() {
 Next steps:
 1. Use an AI coding tool or edit by hand to fill root reference.py with
    the trusted implementation.
-2. Use an AI coding tool or edit by hand to fill root validate.py with
-   exactly one stress benchmark case plus separate correctness-only edge cases.
+2. Use an AI coding tool or edit by hand to fill root validate.py with one
+   official benchmark target (a single case or small suite) plus separate
+   correctness-only edge cases.
 3. Temporarily make candidate/interface.py call reference.kernel_fn, then run:
    uv run python scripts/calibrate_reference.py
-   uv run python validate.py
+   AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1 uv run python validate.py
 4. Revert candidate/interface.py to the optimization entry point.
 5. Commit validate.py, reference.py, and any task setup so worktrees can see them.
 6. Confirm Nsight Compute profiling works:

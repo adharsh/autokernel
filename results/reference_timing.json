@@ -1,15 +1,23 @@
 {
-  "case": "backward_stress_b8_l65536_d4096_w4_bos_silu",
+  "case": "backward_report_parity_v1",
+  "cases": [
+    "anchor_w4_stateful_bos_silu",
+    "anchor_w4_stateless_dense_linear",
+    "anchor_w3_stateful_dense_silu",
+    "anchor_w3_stateless_bos_linear",
+    "anchor_w2_stateful_bos_linear",
+    "anchor_w2_stateless_dense_silu"
+  ],
   "device_name": "NVIDIA H200",
   "device_type": "cuda",
   "dtype": "bfloat16",
   "iters": 1,
-  "ncu_details": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd1/results/reference_ncu/details.txt",
-  "ncu_kernel_count": 385,
-  "ncu_log": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd1/results/reference_ncu/reference.log",
-  "ncu_report": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd1/results/reference_ncu/reference.ncu-rep",
+  "ncu_details": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd2/results/reference_ncu/details.txt",
+  "ncu_kernel_count": 551,
+  "ncu_log": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd2/results/reference_ncu/reference.log",
+  "ncu_report": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd2/results/reference_ncu/reference.ncu-rep",
   "ncu_set": "basic",
-  "reference_us": 296737.44,
+  "reference_us": 106162.66,
   "timing_source": "ncu_duration_us",
   "warmup": 5
 }

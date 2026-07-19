@@ -2,7 +2,9 @@
 
 Agents should replace this reference wrapper with an optimized implementation
 that keeps the same public ``kernel_fn`` signature and returns
-``(dx, dweight, dbias, dinitial_states)``.
+``(dx, dweight, dbias, dinitial_states)``. The wrapper is valid only for the
+``a*/0`` baseline; report-parity validation rejects reference delegation unless
+``AUTOKERNEL_ALLOW_REFERENCE_BASELINE=1`` is set for that baseline run.
 """
 
 from __future__ import annotations
