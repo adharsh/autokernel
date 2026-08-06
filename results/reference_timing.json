@@ -17,7 +17,7 @@
   "ncu_log": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd2/results/reference_ncu/reference.log",
   "ncu_report": "/mnt/weka/home/adharsh.babu/workspace/autoexperiments/conv/bwd2/results/reference_ncu/reference.ncu-rep",
   "ncu_set": "basic",
-  "reference_us": 106162.66,
+  "reference_us": 106161.28,
   "timing_source": "ncu_duration_us",
   "warmup": 5
 }
